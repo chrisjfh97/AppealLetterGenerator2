@@ -382,19 +382,6 @@ class MergeApp(tk.Tk):
             self.section_tabs.select(self.config_section)
             self.config_notebook.select(tab)
 
-    def toggle_howto_panel(self):
-        """Show or hide the quick start panel without crowding the tab."""
-
-        if not hasattr(self, "howto_body") or not hasattr(self, "btn_toggle_howto"):
-            return
-        if self.howto_body.winfo_ismapped():
-            self.howto_body.grid_remove()
-            self.btn_toggle_howto.configure(text="Show steps")
-        else:
-            self.howto_body.grid()
-            self.btn_toggle_howto.configure(text="Hide steps")
-
-
     def create_widgets(self):
         """Construct the notebook and register each application tab."""
         main_frame = ttk.Frame(self, padding=10)
@@ -427,6 +414,7 @@ class MergeApp(tk.Tk):
         self.config_notebook.pack(fill=tk.BOTH, expand=True)
 
         # --- Create Tabs ---
+        self.tab_howto = self.create_howto_tab(self.workflow_notebook)
         self.tab_main = self.create_main_tab(self.workflow_notebook)
         self.tab_extract_config = self.create_extraction_config_tab(self.workflow_notebook) # Now includes CM Headings
         self.tab_support_doc = self.create_supporting_doc_tab(self.workflow_notebook)
@@ -442,6 +430,7 @@ class MergeApp(tk.Tk):
         self.tab_notes = self.create_notes_tab(self.config_notebook)
 
         # --- Logical Tab Order ---
+        self.workflow_notebook.add(self.tab_howto, text="How to Generate")
         self.workflow_notebook.add(self.tab_main, text="Main")
         self.workflow_notebook.add(self.tab_extract_config, text="CM Note Extraction")
         self.workflow_notebook.add(self.tab_support_doc, text="Supporting Documents")
@@ -456,6 +445,7 @@ class MergeApp(tk.Tk):
         # --- End Logical Tab Order ---
 
         self.workflow_tabs = {
+            self.tab_howto,
             self.tab_main,
             self.tab_extract_config,
             self.tab_support_doc,
@@ -477,86 +467,37 @@ class MergeApp(tk.Tk):
     # --- Tab Creation ---
     def create_main_tab(self, notebook):
         """Build the primary tab that handles file selection and merges."""
+
         frame = ttk.Frame(notebook, padding=10)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
 
-        paned = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
-        paned.grid(row=0, column=0, sticky=tk.NSEW)
+        content = ttk.Frame(frame)
+        content.grid(row=0, column=0, sticky=tk.NSEW)
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(5, weight=1)
 
-        # --- Left column: How-to guidance ---
-        howto_column = ttk.Frame(paned, style="Card.TFrame")
-        howto_column.columnconfigure(0, weight=1)
-        paned.add(howto_column, weight=1)
-
-        howto_frame = ttk.LabelFrame(
-            howto_column, text="How to Generate", style="Section.TLabelframe"
-        )
-        howto_frame.grid(row=0, column=0, sticky=tk.NSEW)
-        howto_header = ttk.Frame(howto_frame)
-        howto_header.grid(row=0, column=0, sticky=tk.EW)
-        howto_header.columnconfigure(0, weight=1)
-        ttk.Label(
-            howto_header,
+        description = ttk.Label(
+            content,
             text=(
-                "Follow these quick steps: upload data, choose templates, confirm details, "
-                "and run the generators."
+                "Load your sources, pick the templates and payer, then run your letters, "
+                "forms, faxes, or supporting docs."
             ),
-            justify=tk.LEFT,
-            anchor=tk.W,
-        ).grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.btn_toggle_howto = ttk.Button(
-            howto_header,
-            text="Hide steps",
-            command=self.toggle_howto_panel,
+            style="Subheading.TLabel",
         )
-        self.btn_toggle_howto.grid(row=0, column=1, sticky=tk.E, padx=5, pady=5)
-        self.howto_body = ttk.Frame(howto_frame)
-        self.howto_body.grid(row=1, column=0, sticky=tk.EW)
-        ttk.Label(
-            self.howto_body,
-            text=(
-                "1) Load your data:\n"
-                "   • Pick the Detail Report (Professional) file\n"
-                "   • Pick your Excel file\n"
-                "   • Choose your Output Folder\n"
-                "\n"
-                "2) Choose your templates and payer:\n"
-                "   • Letter template\n"
-                "   • Fax template\n"
-                "   • Form template (if applicable)\n"
-                "   • Payer contact information\n"
-                "\n"
-                "3) Open the Column Configuration tab and confirm:\n"
-                "   • Which column is the Account Number\n"
-                "   • Formatting (dates, money, text)\n"
-                "\n"
-                "4) Return to the Main tab and click:\n"
-                "   • Generate Appeal Letters\n"
-                "   • Generate Forms\n"
-                "   • Generate Fax Coversheets"
-            ),
-            justify=tk.LEFT,
-            anchor=tk.W,
-        ).grid(row=0, column=0, sticky=tk.W, padx=10, pady=(0, 8))
-
-        # --- Right column: inputs and actions ---
-        right_column = ttk.Frame(paned)
-        right_column.columnconfigure(0, weight=1)
-        right_column.rowconfigure(4, weight=1)
-        paned.add(right_column, weight=2)
+        description.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
 
         # --- File Paths ---
         file_frame = ttk.LabelFrame(
-            right_column, text="File Paths", style="Section.TLabelframe"
+            content, text="File Paths", style="Section.TLabelframe"
         )
-        file_frame.grid(row=0, column=0, sticky=tk.EW, pady=5)
-        self.register_grid_weights(file_frame, {1: 1})
-        # --- DETAIL REPORT CLEANER ---
-        ttk.Label(file_frame, text="Detail Report (PROFESSIONAL):").grid(
-            row=0, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.entry_detail_report = ttk.Entry(file_frame, width=80)
+        file_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=5)
+        for col in (1, 4):
+            file_frame.columnconfigure(col, weight=1)
+
+        detail_label = ttk.Label(file_frame, text="Detail Report (PROFESSIONAL):")
+        detail_label.grid(row=0, column=0, padx=5, pady=5, sticky=tk.E)
+        self.entry_detail_report = ttk.Entry(file_frame, width=45)
         self.entry_detail_report.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
         btn_frame = ttk.Frame(file_frame)
         btn_frame.grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
@@ -566,33 +507,45 @@ class MergeApp(tk.Tk):
             command=self.select_detail_report
         )
         btn_browse_detail.pack(side=tk.LEFT)
+
+        self.entry_letter_template = self.create_file_entry(
+            file_frame,
+            "Letter Template:",
+            self.app_config.get("letter_template_path", ""),
+            self.select_letter_template,
+            0,
+            col_offset=3,
+            entry_width=45,
+        )
+
         self.entry_excel = self.create_file_entry(
             file_frame,
             "Excel File:",
             "",
             self.load_excel,
             1,
+            entry_width=45,
         )
-        self.entry_letter_template = self.create_file_entry(
-            file_frame,
-            "Letter Template:",
-            self.app_config.get("letter_template_path", ""),
-            self.select_letter_template,
-            2,
-        )
+
         self.entry_fax_template = self.create_file_entry(
             file_frame,
             "Fax Template:",
             self.app_config.get("fax_template_path", ""),
             self.select_fax_template,
-            3,
+            1,
+            col_offset=3,
+            entry_width=45,
         )
+
         self.entry_output = self.create_file_entry(
             file_frame,
             "Output Folder:",
             "",
             self.select_output,
-            4,
+            2,
+            col_offset=0,
+            entry_width=70,
+            span_columns=4,
         )
         self.btn_clean_report = ttk.Button(
             btn_frame,
@@ -600,64 +553,67 @@ class MergeApp(tk.Tk):
             command=self.start_clean_report_thread
         )
         self.btn_clean_report.pack(side=tk.LEFT, padx=(5,0))
-        # --- END DETAIL REPORT CLEANER ---
+
         # --- Selections ---
         select_frame = ttk.LabelFrame(
-            right_column, text="Letter Parts - Selections", style="Section.TLabelframe"
+            content, text="Letter Parts - Selections", style="Section.TLabelframe"
         )
-        select_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=10)
-        self.register_grid_weights(select_frame, {1: 1, 3: 1})
+        select_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=10)
+        for col in (1, 3, 5):
+            select_frame.columnconfigure(col, weight=1)
 
         ttk.Label(select_frame, text="Address (Letters and Forms):").grid(
             row=0, column=0, padx=5, pady=5, sticky=tk.E
         )
-        self.combo_address = ttk.Combobox(select_frame, state="readonly", width=40)
+        self.combo_address = ttk.Combobox(select_frame, state="readonly", width=35)
         self.combo_address.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+
+        ttk.Label(select_frame, text="Form (If Applicable):").grid(
+            row=0, column=2, padx=5, pady=5, sticky=tk.E
+        )
+        self.combo_form_template = ttk.Combobox(
+            select_frame, state="readonly", width=35
+        )
+        self.combo_form_template.grid(row=0, column=3, padx=5, pady=5, sticky=tk.EW)
+
+        ttk.Label(select_frame, text="Letter Date (Long Format):").grid(
+            row=0, column=4, padx=5, pady=5, sticky=tk.E
+        )
+        self.entry_today_date = ttk.Entry(select_frame, width=35)
+        self.entry_today_date.grid(row=0, column=5, padx=5, pady=5, sticky=tk.EW)
+        self.entry_today_date.insert(0, datetime.now().strftime("%B %d, %Y"))
 
         ttk.Label(select_frame, text="Blurb (Letters and Forms):").grid(
             row=1, column=0, padx=5, pady=5, sticky=tk.E
         )
-        self.combo_blurb = ttk.Combobox(select_frame, state="readonly", width=40)
+        self.combo_blurb = ttk.Combobox(select_frame, state="readonly", width=35)
         self.combo_blurb.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
 
-        ttk.Label(select_frame, text="Form (If Applicable):").grid(
-            row=2, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.combo_form_template = ttk.Combobox(
-            select_frame, state="readonly", width=40
-        )
-        self.combo_form_template.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
-
         ttk.Label(select_frame, text="Payer Contact (Fax Coversheet):").grid(
-            row=3, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.combo_payer_contact = ttk.Combobox(
-            select_frame, state="readonly", width=40
-        )
-        self.combo_payer_contact.grid(row=3, column=1, padx=5, pady=5, sticky=tk.EW)
-
-        ttk.Label(select_frame, text="Letter Date (Long Format):").grid(
-            row=0, column=2, padx=5, pady=5, sticky=tk.E
-        )
-        self.entry_today_date = ttk.Entry(select_frame, width=40)
-        self.entry_today_date.grid(row=0, column=3, padx=5, pady=5, sticky=tk.EW)
-        self.entry_today_date.insert(0, datetime.now().strftime("%B %d, %Y"))
-
-        ttk.Label(select_frame, text="File Date (e.g., MMDDYY):").grid(
             row=1, column=2, padx=5, pady=5, sticky=tk.E
         )
-        self.entry_file_date = ttk.Entry(select_frame, width=40)
-        self.entry_file_date.grid(row=1, column=3, padx=5, pady=5, sticky=tk.EW)
+        self.combo_payer_contact = ttk.Combobox(
+            select_frame, state="readonly", width=35
+        )
+        self.combo_payer_contact.grid(row=1, column=3, padx=5, pady=5, sticky=tk.EW)
+
+        ttk.Label(select_frame, text="File Date (e.g., MMDDYY):").grid(
+            row=1, column=4, padx=5, pady=5, sticky=tk.E
+        )
+        self.entry_file_date = ttk.Entry(select_frame, width=35)
+        self.entry_file_date.grid(row=1, column=5, padx=5, pady=5, sticky=tk.EW)
         self.entry_file_date.insert(0, datetime.now().strftime("%m%d%y"))
 
         ttk.Label(select_frame, text="Client Acronym:").grid(
-            row=2, column=2, padx=5, pady=5, sticky=tk.E
+            row=2, column=0, padx=5, pady=5, sticky=tk.E
         )
-        self.entry_client_acronym = ttk.Entry(select_frame, width=40)
-        self.entry_client_acronym.grid(row=2, column=3, padx=5, pady=5, sticky=tk.EW)
+        self.entry_client_acronym = ttk.Entry(select_frame, width=35)
+        self.entry_client_acronym.grid(
+            row=2, column=1, padx=5, pady=5, sticky=tk.EW, columnspan=3
+        )
 
         sample_btn_frame = ttk.Frame(select_frame)
-        sample_btn_frame.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(5, 0))
+        sample_btn_frame.grid(row=2, column=4, columnspan=2, sticky=tk.EW, pady=(5, 0))
         sample_btn_frame.columnconfigure(0, weight=1)
         sample_btn_frame.columnconfigure(1, weight=1)
         self.btn_sample_letter = ttk.Button(
@@ -673,13 +629,9 @@ class MergeApp(tk.Tk):
         )
         self.btn_sample_form.grid(row=0, column=1, sticky=tk.EW, padx=3, pady=2)
 
-        select_frame.grid_columnconfigure(0, weight=0)
-        select_frame.grid_columnconfigure(1, weight=1)
-        select_frame.grid_columnconfigure(2, weight=0)
-        select_frame.grid_columnconfigure(3, weight=1)
         # --- Run Buttons ---
-        run_frame = ttk.Frame(right_column)
-        run_frame.grid(row=2, column=0, sticky=tk.EW, pady=10)
+        run_frame = ttk.Frame(content)
+        run_frame.grid(row=3, column=0, sticky=tk.EW, pady=10)
         for col in range(4):
             run_frame.columnconfigure(col, weight=1)
         self.btn_run_letters = ttk.Button(
@@ -705,16 +657,17 @@ class MergeApp(tk.Tk):
         self.btn_run_faxes.grid(row=0, column=2, sticky=tk.NSEW, padx=2, pady=2)
         self.btn_clean_filenames = ttk.Button(
             run_frame,
-            text="Remove Special Characters from\nfile names (Website Appeals)",
+            text="Remove Special Characters from file names (Website Appeals)",
             command=self.handle_clean_special_chars,
             style="Primary.TButton",
         )
         self.btn_clean_filenames.grid(row=0, column=3, sticky=tk.NSEW, padx=2, pady=2)
 
+        # --- Progress ---
         progress_frame = ttk.LabelFrame(
-            right_column, text="Progress & Controls", style="Section.TLabelframe"
+            content, text="Progress & Controls", style="Section.TLabelframe"
         )
-        progress_frame.grid(row=3, column=0, sticky=tk.EW, pady=5)
+        progress_frame.grid(row=4, column=0, sticky=tk.EW, pady=5)
         progress_frame.columnconfigure(0, weight=1)
         self.progress_bar = ttk.Progressbar(
             progress_frame,
@@ -735,10 +688,11 @@ class MergeApp(tk.Tk):
         )
         self.btn_cancel_tasks.grid(row=0, column=1, padx=5, pady=5, sticky=tk.NSEW, rowspan=2)
 
+        # --- Errors ---
         error_frame = ttk.LabelFrame(
-            right_column, text="Error Log (per document)", style="Section.TLabelframe"
+            content, text="Error Log (per document)", style="Section.TLabelframe"
         )
-        error_frame.grid(row=4, column=0, sticky=tk.NSEW, pady=10)
+        error_frame.grid(row=5, column=0, sticky=tk.NSEW, pady=10)
         error_frame.columnconfigure(0, weight=1)
         error_frame.rowconfigure(1, weight=1)
         error_header = ttk.Label(
@@ -758,113 +712,79 @@ class MergeApp(tk.Tk):
         self.error_tree.heading("error", text="Error")
         self.error_tree.heading("action", text="Next Steps")
         self.error_tree.column("item", width=160, anchor=tk.W)
-        self.error_tree.column("error", width=320, anchor=tk.W)
+        self.error_tree.column("error", width=360, anchor=tk.W)
         self.error_tree.column("action", width=240, anchor=tk.W)
-        error_scroll = ttk.Scrollbar(
-            error_frame, orient="vertical", command=self.error_tree.yview
-        )
-        self.error_tree.configure(yscrollcommand=error_scroll.set)
-        self.error_tree.grid(row=1, column=0, sticky=tk.NSEW, padx=(5, 0), pady=5)
-        error_scroll.grid(row=1, column=1, sticky=tk.NS, padx=(0, 5), pady=5)
-        self.btn_clear_errors = ttk.Button(
-            error_frame, text="Clear Error Log", command=self.clear_error_log
-        )
-        self.btn_clear_errors.grid(row=2, column=0, sticky=tk.W, padx=5, pady=(0, 5))
+        self.error_tree.grid(row=1, column=0, sticky=tk.NSEW, padx=5, pady=5)
+        scrollbar = ttk.Scrollbar(error_frame, orient="vertical", command=self.error_tree.yview)
+        scrollbar.grid(row=1, column=1, sticky=tk.NS, pady=5)
+        self.error_tree.configure(yscrollcommand=scrollbar.set)
         return frame
-    def create_column_config_tab(self, notebook):
-        """Set up the tab for configuring column formats and required fields."""
-        frame = ttk.Frame(notebook, padding=10)
-        special_frame = ttk.LabelFrame(frame, text="Required Column")
-        special_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        self.combo_account_col = self.create_special_combo(
-            special_frame, "Account Number Column:", 0
-        )
-        format_frame = ttk.LabelFrame(frame, text="Column Data Formats")
-        format_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        canvas = tk.Canvas(format_frame)
-        scrollbar = ttk.Scrollbar(format_frame, orient="vertical", command=canvas.yview)
-        self.col_config_scrollable_frame = ttk.Frame(canvas)
-        self.col_config_scrollable_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        canvas.create_window(
-            (0, 0), window=self.col_config_scrollable_frame, anchor="nw"
-        )
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def create_howto_tab(self, notebook):
+        """Provide a visually separated quick-start guide."""
+
+        frame = ttk.Frame(notebook, padding=15)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        hero = ttk.LabelFrame(frame, text="Quick Start", style="Section.TLabelframe")
+        hero.grid(row=0, column=0, sticky=tk.NSEW, pady=(0, 10))
+        hero.columnconfigure(0, weight=1)
         ttk.Label(
-            self.col_config_scrollable_frame,
-            text="Load an Excel file to see column formats.",
-        ).pack(pady=20)
-        return frame
-    # --- CLD SPLITTER ---
-    def create_supporting_doc_tab(self, notebook):
-        """Create the supporting document tools including CLD splitting."""
-        frame = ttk.Frame(notebook, padding=10)
-        # --- Frame 1: Standard Supporting Document ---
-        support_frame = ttk.LabelFrame(frame, text="Copy a Supporting Document into each Appeal folder")
-        support_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
-        self.register_grid_weights(support_frame, {1: 1})
-        self.entry_support_doc = self.create_file_entry(
-            support_frame,
-            "Supporting Doc:",
-            self.app_config.get("supporting_doc_path", ""),
-            self.select_support_doc,
-            0,
-        )
-        ttk.Label(support_frame, text="Filename Suffix:").grid(
-            row=1, column=0, padx=5, pady=10, sticky=tk.E
-        )
-        self.entry_support_suffix = ttk.Entry(support_frame, width=80)
-        self.entry_support_suffix.insert(
-            0, self.app_config.get("supporting_doc_suffix", "addinfo")
-        )
-        self.entry_support_suffix.grid(row=1, column=1, padx=5, pady=10, sticky=tk.EW)
-        btn_save = ttk.Button(
-            support_frame,
-            text="Save Settings",
-            command=self.save_config,
-        )
-        btn_save.grid(row=2, column=1, padx=5, pady=10, sticky=tk.W)
-        self.btn_run_support_doc = ttk.Button(
-            support_frame,
-            text="Copy Single Document to All Folders",
-            command=self.start_support_doc_thread,
-        )
-        self.btn_run_support_doc.grid(row=3,column=0,columnspan=3, padx=5, pady=10, sticky=tk.EW, ipady=8)
-        # --- Frame 2: CLD Splitter ---
-        cld_frame = ttk.LabelFrame(frame, text="Claim List Detail (CLD) Splitter")
-        cld_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
-        self.register_grid_weights(cld_frame, {1: 1})
-        self.cld_file_var = tk.StringVar()
-        ttk.Label(cld_frame, text="CLD PDF File:").grid(
-            row=0, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.entry_cld_file = ttk.Entry(cld_frame, width=80, textvariable=self.cld_file_var)
-        self.entry_cld_file.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
-        btn_browse_cld = ttk.Button(
-            cld_frame,
-            text="Browse...",
-            command=self.select_cld_file
-        )
-        btn_browse_cld.grid(row=0, column=2, padx=5, pady=5)
-        self.btn_split_cld = ttk.Button(
-            cld_frame,
-            text="Split CLD File",
-            command=self.start_split_cld_thread,
-        )
-        self.btn_split_cld.grid(row=1, column=0, columnspan=3, padx=5, pady=10, sticky=tk.EW, ipady=8)
-        ttk.Label(
-            cld_frame,
-            text="This tool splits a single CLD PDF into multiple PDFs, one per claim.\n"
-                 "It uses the 'Output Folder', 'File Date', and 'Client Acronym' from the Main tab.\n"
-                 "It saves files as: [Date].[Client].[RefNum].cld.pdf",
+            hero,
+            text=(
+                "Upload your data, choose the right templates, and generate polished letters, "
+                "forms, and fax coversheets in one place."
+            ),
+            style="Subheading.TLabel",
+            wraplength=760,
             justify=tk.LEFT,
-        ).grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+            anchor=tk.W,
+            padding=10,
+        ).grid(row=0, column=0, sticky=tk.W)
+
+        steps_frame = ttk.Frame(frame)
+        steps_frame.grid(row=1, column=0, sticky=tk.NSEW)
+        steps_frame.columnconfigure(0, weight=1)
+        steps_frame.columnconfigure(1, weight=1)
+
+        left_card = ttk.LabelFrame(
+            steps_frame, text="Prepare your inputs", style="Section.TLabelframe"
+        )
+        left_card.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
+        left_card.columnconfigure(0, weight=1)
+        ttk.Label(
+            left_card,
+            text=(
+                "1) Pick the Detail Report (Professional) PDF.\n"
+                "2) Pick the Excel workbook with your accounts.\n"
+                "3) Choose the Output Folder where letters will be saved."
+            ),
+            justify=tk.LEFT,
+            anchor=tk.W,
+            padding=10,
+        ).grid(row=0, column=0, sticky=tk.W)
+
+        right_card = ttk.LabelFrame(
+            steps_frame,
+            text="Choose templates & run",
+            style="Section.TLabelframe",
+        )
+        right_card.grid(row=0, column=1, sticky=tk.NSEW, padx=(6, 0))
+        right_card.columnconfigure(0, weight=1)
+        ttk.Label(
+            right_card,
+            text=(
+                "4) Select the letter, fax, and form templates plus payer contact.\n"
+                "5) Confirm column mapping in Column Configuration.\n"
+                "6) Return to Main and click Generate for letters, forms, or faxes."
+            ),
+            justify=tk.LEFT,
+            anchor=tk.W,
+            padding=10,
+        ).grid(row=0, column=0, sticky=tk.W)
+
         return frame
-    # --- END CLD SPLITTER ---
-    # --- REFACTORED: CM Note Extraction + CM Headings ---
     def create_extraction_config_tab(self, notebook):
         """Assemble the CM note extraction tab with configuration controls."""
         frame = ttk.Frame(notebook, padding=10)
@@ -1494,17 +1414,39 @@ class MergeApp(tk.Tk):
         self.update_placeholder_list()
         return frame
     # --- UI Helper Functions ---
-    def create_file_entry(self, parent, label_text, entry_text, command, row):
+    def create_file_entry(
+        self,
+        parent,
+        label_text,
+        entry_text,
+        command,
+        row,
+        col_offset=0,
+        entry_width=50,
+        span_columns=1,
+    ):
         """Create a labeled entry with a browse button for selecting files."""
+
+        label_column = col_offset
+        entry_column = col_offset + 1
+        button_column = entry_column + span_columns
+
         ttk.Label(parent, text=label_text).grid(
-            row=row, column=0, padx=5, pady=5, sticky=tk.E
+            row=row, column=label_column, padx=5, pady=5, sticky=tk.E
         )
-        entry = ttk.Entry(parent, width=80)
+        entry = ttk.Entry(parent, width=entry_width)
         entry.insert(0, entry_text)
-        entry.grid(row=row, column=1, padx=5, pady=5, sticky=tk.EW)
+        entry.grid(
+            row=row,
+            column=entry_column,
+            columnspan=span_columns,
+            padx=5,
+            pady=5,
+            sticky=tk.EW,
+        )
         btn = ttk.Button(parent, text="Browse...", command=command)
-        btn.grid(row=row, column=2, padx=5, pady=5)
-        self.register_grid_weights(parent, {1: 1})
+        btn.grid(row=row, column=button_column, padx=5, pady=5)
+        self.register_grid_weights(parent, {entry_column: 1})
         return entry
     def create_labeled_entry(self, parent, label_text, default_value, row):
         """Create a labeled entry widget pre-populated with a value."""
