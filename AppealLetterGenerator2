@@ -344,6 +344,16 @@ class MergeApp(tk.Tk):
             for column, weight in weights.items():
                 widget.columnconfigure(column, weight=weight)
 
+    def select_tab(self, tab):
+        """Navigate to the correct section/tab given a tab frame."""
+
+        if tab in getattr(self, "workflow_tabs", set()):
+            self.section_tabs.select(self.workflow_section)
+            self.workflow_notebook.select(tab)
+        elif tab in getattr(self, "config_tabs", set()):
+            self.section_tabs.select(self.config_section)
+            self.config_notebook.select(tab)
+
     def toggle_howto_panel(self):
         """Show or hide the quick start panel without crowding the tab."""
 
@@ -361,42 +371,73 @@ class MergeApp(tk.Tk):
         """Construct the notebook and register each application tab."""
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.section_tabs = ttk.Notebook(main_frame)
+        self.section_tabs.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # --- Top-level navigation ---
+        self.workflow_section = ttk.Frame(self.section_tabs)
+        self.config_section = ttk.Frame(self.section_tabs)
+        self.section_tabs.add(self.workflow_section, text="Workflow")
+        self.section_tabs.add(self.config_section, text="Configuration & Tools")
+
+        # --- Sub notebooks ---
+        self.workflow_notebook = ttk.Notebook(self.workflow_section)
+        self.workflow_notebook.pack(fill=tk.BOTH, expand=True)
+        self.config_notebook = ttk.Notebook(self.config_section)
+        self.config_notebook.pack(fill=tk.BOTH, expand=True)
+
         # --- Create Tabs ---
-        self.tab_main = self.create_main_tab()
-        self.tab_extract_config = self.create_extraction_config_tab() # Now includes CM Headings
-        self.tab_support_doc = self.create_supporting_doc_tab()
-        self.tab_blurb_editor = self.create_blurb_editor_tab() # New combined tab
-        self.tab_payer_setup = self.create_payer_setup_tab() # New combined tab
+        self.tab_main = self.create_main_tab(self.workflow_notebook)
+        self.tab_extract_config = self.create_extraction_config_tab(self.workflow_notebook) # Now includes CM Headings
+        self.tab_support_doc = self.create_supporting_doc_tab(self.workflow_notebook)
+        self.tab_run_results = self.create_run_results_tab(self.workflow_notebook)
+
+        self.tab_blurb_editor = self.create_blurb_editor_tab(self.config_notebook) # New combined tab
+        self.tab_payer_setup = self.create_payer_setup_tab(self.config_notebook) # New combined tab
         self.tab_forms = self.create_template_manager_tab(
-            "Form Templates", self.app_config["form_templates"]
+            "Form Templates", self.app_config["form_templates"], self.config_notebook
         )
-        self.tab_user_info = self.create_user_info_tab()
-        self.tab_config = self.create_column_config_tab()
-        self.tab_notes = self.create_notes_tab()
-        self.tab_run_results = self.create_run_results_tab()
+        self.tab_user_info = self.create_user_info_tab(self.config_notebook)
+        self.tab_config = self.create_column_config_tab(self.config_notebook)
+        self.tab_notes = self.create_notes_tab(self.config_notebook)
+
         # --- Logical Tab Order ---
-        self.notebook.add(self.tab_main, text="Main")
-        self.notebook.add(self.tab_extract_config, text="CM Note Extraction")
-        self.notebook.add(self.tab_support_doc, text="Supporting Documents")
-        self.notebook.add(self.tab_blurb_editor, text="Blurb Editor")
-        self.notebook.add(self.tab_payer_setup, text="Payer Setup")
-        self.notebook.add(self.tab_forms, text="Form Templates")
-        self.notebook.add(self.tab_user_info, text="My Contact Info")
-        self.notebook.add(self.tab_config, text="Column Configuration")
-        self.notebook.add(self.tab_notes, text="My Notes")
-        self.notebook.add(self.tab_run_results, text="Recent Run Results")
+        self.workflow_notebook.add(self.tab_main, text="Main")
+        self.workflow_notebook.add(self.tab_extract_config, text="CM Note Extraction")
+        self.workflow_notebook.add(self.tab_support_doc, text="Supporting Documents")
+        self.workflow_notebook.add(self.tab_run_results, text="Recent Run Results")
+
+        self.config_notebook.add(self.tab_blurb_editor, text="Blurb Editor")
+        self.config_notebook.add(self.tab_payer_setup, text="Payer Setup")
+        self.config_notebook.add(self.tab_forms, text="Form Templates")
+        self.config_notebook.add(self.tab_user_info, text="My Contact Info")
+        self.config_notebook.add(self.tab_config, text="Column Configuration")
+        self.config_notebook.add(self.tab_notes, text="My Notes")
         # --- End Logical Tab Order ---
+
+        self.workflow_tabs = {
+            self.tab_main,
+            self.tab_extract_config,
+            self.tab_support_doc,
+            self.tab_run_results,
+        }
+        self.config_tabs = {
+            self.tab_blurb_editor,
+            self.tab_payer_setup,
+            self.tab_forms,
+            self.tab_user_info,
+            self.tab_config,
+            self.tab_notes,
+        }
         self.update_main_combos()
         self.status_bar = ttk.Label(
             main_frame, text="Ready. Load an Excel file.", relief=tk.SUNKEN, anchor=tk.W
         )
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
     # --- Tab Creation ---
-    def create_main_tab(self):
+    def create_main_tab(self, notebook):
         """Build the primary tab that handles file selection and merges."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=0)
         # --- How To ---
@@ -656,9 +697,9 @@ class MergeApp(tk.Tk):
         )
         self.btn_clear_errors.grid(row=2, column=0, sticky=tk.W, padx=5, pady=(0, 5))
         return frame
-    def create_column_config_tab(self):
+    def create_column_config_tab(self, notebook):
         """Set up the tab for configuring column formats and required fields."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         special_frame = ttk.LabelFrame(frame, text="Required Column")
         special_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         self.combo_account_col = self.create_special_combo(
@@ -684,9 +725,9 @@ class MergeApp(tk.Tk):
         ).pack(pady=20)
         return frame
     # --- CLD SPLITTER ---
-    def create_supporting_doc_tab(self):
+    def create_supporting_doc_tab(self, notebook):
         """Create the supporting document tools including CLD splitting."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         # --- Frame 1: Standard Supporting Document ---
         support_frame = ttk.LabelFrame(frame, text="Copy a Supporting Document into each Appeal folder")
         support_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
@@ -750,9 +791,9 @@ class MergeApp(tk.Tk):
         return frame
     # --- END CLD SPLITTER ---
     # --- REFACTORED: CM Note Extraction + CM Headings ---
-    def create_extraction_config_tab(self):
+    def create_extraction_config_tab(self, notebook):
         """Assemble the CM note extraction tab with configuration controls."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
         # --- Left Pane: Extraction Settings & Actions ---
@@ -912,9 +953,9 @@ class MergeApp(tk.Tk):
         )
         self.populate_listbox(heading_listbox, data_dict)
         return frame
-    def create_notes_tab(self):
+    def create_notes_tab(self, notebook):
         """Build the tab that stores user-authored personal notes."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         notes_frame = ttk.LabelFrame(
             frame,
             text="My Notes (Use this section to save formulas, reminders, notes, and items you may want to reuse in the future)",
@@ -930,9 +971,9 @@ class MergeApp(tk.Tk):
         )
         btn_save.pack(side=tk.BOTTOM, pady=5, padx=5, fill=tk.X)
         return frame
-    def create_run_results_tab(self):
+    def create_run_results_tab(self, notebook):
         """Build a tab that displays per-record run results with filters."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         filter_frame = ttk.LabelFrame(frame, text="Filters")
         filter_frame.pack(fill=tk.X, pady=(0, 10))
         self.run_results_type_var = tk.StringVar(value="All")
@@ -1019,9 +1060,9 @@ class MergeApp(tk.Tk):
         self.run_results_tree.bind("<Double-1>", lambda event: self.open_selected_output())
         self.refresh_run_results_view()
         return frame
-    def create_list_manager_tab(self, name, data_dict):
+    def create_list_manager_tab(self, name, data_dict, notebook):
         """Create a generic list editor used for templated text content."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
         list_frame = ttk.Frame(paned_window, padding=5)
@@ -1079,9 +1120,9 @@ class MergeApp(tk.Tk):
         self.populate_listbox(listbox, data_dict)
         return frame
     # --- REFACTORED: New tab combining Payer Contacts and Payer Addresses ---
-    def create_payer_setup_tab(self):
+    def create_payer_setup_tab(self, notebook):
         """Construct the payer setup tab for contacts and addresses."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
         # --- Left Pane: Payer Contacts (Fax) ---
@@ -1206,9 +1247,9 @@ class MergeApp(tk.Tk):
         self.populate_listbox(address_listbox, address_dict)
         return frame
     # --- User Info Tab ---
-    def create_user_info_tab(self):
+    def create_user_info_tab(self, notebook):
         """Render the tab where users store their contact information."""
-        frame = ttk.Frame(self.notebook, padding=20)
+        frame = ttk.Frame(notebook, padding=20)
         user_frame = ttk.LabelFrame(frame, text="Your Info (Sender)")
         user_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         self.user_info_entries = {}
@@ -1234,9 +1275,9 @@ class MergeApp(tk.Tk):
         btn_save.pack(pady=20)
         return frame
     # --- Template Manager Tab ---
-    def create_template_manager_tab(self, name, data_dict):
+    def create_template_manager_tab(self, name, data_dict, notebook):
         """Provide an editor tab for managing form template mappings."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
         list_frame = ttk.Frame(paned_window, padding=5)
@@ -1301,9 +1342,9 @@ class MergeApp(tk.Tk):
         self.populate_listbox(listbox, data_dict)
         return frame
     # --- REFACTORED: New tab combining Blurbs and Placeholders ---
-    def create_blurb_editor_tab(self):
+    def create_blurb_editor_tab(self, notebook):
         """Create the blurb editor tab for reusable letter snippets."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
         blurb_frame = ttk.Frame(paned_window, padding=5)
@@ -2203,7 +2244,7 @@ class MergeApp(tk.Tk):
                 "Error",
                 "Please go to 'Column Configuration' and select the 'Account Number Column'.",
             )
-            self.notebook.select(self.tab_config)
+            self.select_tab(self.tab_config)
             return False
         if self.df is None:
             messagebox.showerror(
@@ -2215,7 +2256,7 @@ class MergeApp(tk.Tk):
                 "Error",
                 f"The selected Account Number Column ('{self.account_col_name}') does not exist in the loaded Excel file. Please re-select on the 'Column Configuration' tab.",
             )
-            self.notebook.select(self.tab_config)
+            self.select_tab(self.tab_config)
             return False
         return True
     # --- NOTE EXTRACTION V2 (Heavily modified function) ---
@@ -2635,7 +2676,7 @@ class MergeApp(tk.Tk):
                 "Error",
                 "Please select the Account Number Column on the Column Configuration tab.",
             )
-            self.notebook.select(self.tab_config)
+            self.select_tab(self.tab_config)
             return False
         if self.df is None or self.df.empty:
             messagebox.showerror(
@@ -2647,7 +2688,7 @@ class MergeApp(tk.Tk):
                 "Error",
                 f"The selected Account Number Column ('{self.account_col_name}') does not exist in the loaded Excel file.",
             )
-            self.notebook.select(self.tab_config)
+            self.select_tab(self.tab_config)
             return False
         if self.combo_address.get() == "(None)":
             messagebox.showerror(
@@ -2946,14 +2987,14 @@ class MergeApp(tk.Tk):
                 "Error",
                 "Please select a valid 'Supporting Doc' from the 'Supporting Doc' tab.",
             )
-            self.notebook.select(self.tab_support_doc)
+            self.select_tab(self.tab_support_doc)
             return
         if not self.support_doc_suffix:
             messagebox.showerror(
                 "Error",
                 "Please provide a 'Filename Suffix' in the 'Supporting Doc' tab.",
             )
-            self.notebook.select(self.tab_support_doc)
+            self.select_tab(self.tab_support_doc)
             return
         self.set_buttons_state("disabled")
         threading.Thread(target=self.run_support_doc_merge, daemon=True).start()
@@ -3122,7 +3163,7 @@ class MergeApp(tk.Tk):
             return
         if not output_folder or not date_str or not client_str:
             messagebox.showerror("Error", "Please fill out 'Output Folder', 'File Date', and 'Client Acronym' on the 'Main' tab first.")
-            self.notebook.select(self.tab_main)
+            self.select_tab(self.tab_main)
             return
         self.set_buttons_state("disabled")
         self.q_print("Starting CLD file splitting...")
