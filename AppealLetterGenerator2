@@ -256,6 +256,7 @@ class MergeApp(tk.Tk):
         super().__init__()
         self.title("PARS - Letter Generation v3.0")
         self.configure_window_geometry()
+        self.configure_styles()
         # --- Data Storage ---
         self.df = None
         self.app_config = {
@@ -326,6 +327,33 @@ class MergeApp(tk.Tk):
             min_height if screen_h >= min_height else screen_h,
         )
 
+    def configure_styles(self):
+        """Apply light styling tweaks to give the UI more breathing room."""
+
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            # Keep the default theme if "clam" is unavailable.
+            pass
+
+        base_font = style.lookup("TLabel", "font") or "TkDefaultFont"
+        if isinstance(base_font, (tuple, list)):
+            base_font_name = base_font[0]
+        else:
+            base_font_name = base_font
+
+        style.configure(
+            "Heading.TLabel", font=(base_font_name, 14, "bold"), padding=(0, 2, 0, 4)
+        )
+        style.configure(
+            "Subheading.TLabel", font=(base_font_name, 10), foreground="#4a5568"
+        )
+        style.configure("Card.TFrame", relief=tk.GROOVE, borderwidth=1, padding=8)
+        style.configure("Section.TLabelframe", padding=(12, 10))
+        style.configure("Section.TLabelframe.Label", font=(base_font_name, 10, "bold"))
+        style.configure("Primary.TButton", padding=(12, 8))
+
     def register_grid_weights(self, widget, weights):
         """Queue grid weight configurations for later application."""
         if widget is None or not weights:
@@ -371,6 +399,18 @@ class MergeApp(tk.Tk):
         """Construct the notebook and register each application tab."""
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(main_frame, padding=(0, 0, 0, 8))
+        header.pack(fill=tk.X)
+        ttk.Label(header, text="Appeal Letter Workspace", style="Heading.TLabel").pack(
+            anchor=tk.W
+        )
+        ttk.Label(
+            header,
+            text="Organized tools for generating letters, forms, faxes, and supporting documents.",
+            style="Subheading.TLabel",
+        ).pack(anchor=tk.W)
+
         self.section_tabs = ttk.Notebook(main_frame)
         self.section_tabs.pack(fill=tk.BOTH, expand=True, pady=5)
 
@@ -439,10 +479,20 @@ class MergeApp(tk.Tk):
         """Build the primary tab that handles file selection and merges."""
         frame = ttk.Frame(notebook, padding=10)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=0)
-        # --- How To ---
-        howto_frame = ttk.LabelFrame(frame, text="How to Generate")
-        howto_frame.grid(row=0, column=0, sticky=tk.EW, pady=(0, 5))
+        frame.rowconfigure(0, weight=1)
+
+        paned = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
+        paned.grid(row=0, column=0, sticky=tk.NSEW)
+
+        # --- Left column: How-to guidance ---
+        howto_column = ttk.Frame(paned, style="Card.TFrame")
+        howto_column.columnconfigure(0, weight=1)
+        paned.add(howto_column, weight=1)
+
+        howto_frame = ttk.LabelFrame(
+            howto_column, text="How to Generate", style="Section.TLabelframe"
+        )
+        howto_frame.grid(row=0, column=0, sticky=tk.NSEW)
         howto_header = ttk.Frame(howto_frame)
         howto_header.grid(row=0, column=0, sticky=tk.EW)
         howto_header.columnconfigure(0, weight=1)
@@ -490,9 +540,17 @@ class MergeApp(tk.Tk):
             anchor=tk.W,
         ).grid(row=0, column=0, sticky=tk.W, padx=10, pady=(0, 8))
 
+        # --- Right column: inputs and actions ---
+        right_column = ttk.Frame(paned)
+        right_column.columnconfigure(0, weight=1)
+        right_column.rowconfigure(4, weight=1)
+        paned.add(right_column, weight=2)
+
         # --- File Paths ---
-        file_frame = ttk.LabelFrame(frame, text="File Paths")
-        file_frame.grid(row=1, column=0, sticky=tk.EW, pady=5)
+        file_frame = ttk.LabelFrame(
+            right_column, text="File Paths", style="Section.TLabelframe"
+        )
+        file_frame.grid(row=0, column=0, sticky=tk.EW, pady=5)
         self.register_grid_weights(file_frame, {1: 1})
         # --- DETAIL REPORT CLEANER ---
         ttk.Label(file_frame, text="Detail Report (PROFESSIONAL):").grid(
@@ -544,8 +602,10 @@ class MergeApp(tk.Tk):
         self.btn_clean_report.pack(side=tk.LEFT, padx=(5,0))
         # --- END DETAIL REPORT CLEANER ---
         # --- Selections ---
-        select_frame = ttk.LabelFrame(frame, text="Letter Parts - Selections")
-        select_frame.grid(row=2, column=0, sticky=tk.NSEW, pady=10)
+        select_frame = ttk.LabelFrame(
+            right_column, text="Letter Parts - Selections", style="Section.TLabelframe"
+        )
+        select_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=10)
         self.register_grid_weights(select_frame, {1: 1, 3: 1})
 
         ttk.Label(select_frame, text="Address (Letters and Forms):").grid(
@@ -618,31 +678,43 @@ class MergeApp(tk.Tk):
         select_frame.grid_columnconfigure(2, weight=0)
         select_frame.grid_columnconfigure(3, weight=1)
         # --- Run Buttons ---
-        run_frame = ttk.Frame(frame)
-        run_frame.grid(row=3, column=0, sticky=tk.EW, pady=10)
+        run_frame = ttk.Frame(right_column)
+        run_frame.grid(row=2, column=0, sticky=tk.EW, pady=10)
         for col in range(4):
             run_frame.columnconfigure(col, weight=1)
         self.btn_run_letters = ttk.Button(
-            run_frame, text="Generate Appeal Letters", command=self.start_letter_merge_thread
+            run_frame,
+            text="Generate Appeal Letters",
+            command=self.start_letter_merge_thread,
+            style="Primary.TButton",
         )
         self.btn_run_letters.grid(row=0, column=0, sticky=tk.NSEW, padx=2, pady=2)
         self.btn_run_forms = ttk.Button(
-            run_frame, text="Generate Forms", command=self.start_form_merge_thread
+            run_frame,
+            text="Generate Forms",
+            command=self.start_form_merge_thread,
+            style="Primary.TButton",
         )
         self.btn_run_forms.grid(row=0, column=1, sticky=tk.NSEW, padx=2, pady=2)
         self.btn_run_faxes = ttk.Button(
-            run_frame, text="Generate Fax Coversheets", command=self.start_fax_merge_thread
+            run_frame,
+            text="Generate Fax Coversheets",
+            command=self.start_fax_merge_thread,
+            style="Primary.TButton",
         )
         self.btn_run_faxes.grid(row=0, column=2, sticky=tk.NSEW, padx=2, pady=2)
         self.btn_clean_filenames = ttk.Button(
             run_frame,
             text="Remove Special Characters from\nfile names (Website Appeals)",
             command=self.handle_clean_special_chars,
+            style="Primary.TButton",
         )
         self.btn_clean_filenames.grid(row=0, column=3, sticky=tk.NSEW, padx=2, pady=2)
 
-        progress_frame = ttk.LabelFrame(frame, text="Progress & Controls")
-        progress_frame.grid(row=4, column=0, sticky=tk.EW, pady=5)
+        progress_frame = ttk.LabelFrame(
+            right_column, text="Progress & Controls", style="Section.TLabelframe"
+        )
+        progress_frame.grid(row=3, column=0, sticky=tk.EW, pady=5)
         progress_frame.columnconfigure(0, weight=1)
         self.progress_bar = ttk.Progressbar(
             progress_frame,
@@ -663,8 +735,10 @@ class MergeApp(tk.Tk):
         )
         self.btn_cancel_tasks.grid(row=0, column=1, padx=5, pady=5, sticky=tk.NSEW, rowspan=2)
 
-        error_frame = ttk.LabelFrame(frame, text="Error Log (per document)")
-        error_frame.grid(row=5, column=0, sticky=tk.NSEW, pady=10)
+        error_frame = ttk.LabelFrame(
+            right_column, text="Error Log (per document)", style="Section.TLabelframe"
+        )
+        error_frame.grid(row=4, column=0, sticky=tk.NSEW, pady=10)
         error_frame.columnconfigure(0, weight=1)
         error_frame.rowconfigure(1, weight=1)
         error_header = ttk.Label(
