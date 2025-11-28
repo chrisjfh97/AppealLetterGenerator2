@@ -720,6 +720,73 @@ class MergeApp(tk.Tk):
         self.error_tree.configure(yscrollcommand=scrollbar.set)
         return frame
 
+    def create_column_config_tab(self, notebook):
+        """Let users map columns and formats with a scrollable grid."""
+
+        frame = ttk.Frame(notebook, padding=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        ttk.Label(
+            frame,
+            text=(
+                "Pick the Account Number column and choose formatting for each field. "
+                "Load an Excel file on the Main tab to populate the list."
+            ),
+            style="Subheading.TLabel",
+            wraplength=820,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+
+        selection = ttk.Frame(frame)
+        selection.grid(row=1, column=0, sticky=tk.EW, pady=(0, 6))
+        selection.columnconfigure(1, weight=1)
+        ttk.Label(selection, text="Account Number Column:").grid(
+            row=0, column=0, padx=5, pady=5, sticky=tk.E
+        )
+        self.combo_account_col = ttk.Combobox(selection, state="readonly", width=45)
+        self.combo_account_col.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        saved_account_col = self.app_config["special_cols"].get("account_col", "")
+        if saved_account_col:
+            self.combo_account_col.set(saved_account_col)
+        ttk.Button(selection, text="Save", command=self.save_config).grid(
+            row=0, column=2, padx=5, pady=5
+        )
+
+        container = ttk.Frame(frame)
+        container.grid(row=2, column=0, sticky=tk.NSEW)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        self.col_config_canvas = tk.Canvas(container, highlightthickness=0)
+        vsb = ttk.Scrollbar(
+            container, orient="vertical", command=self.col_config_canvas.yview
+        )
+        self.col_config_canvas.configure(yscrollcommand=vsb.set)
+        self.col_config_canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        vsb.grid(row=0, column=1, sticky=tk.NS)
+
+        self.col_config_scrollable_frame = ttk.Frame(self.col_config_canvas)
+        self._col_config_window = self.col_config_canvas.create_window(
+            (0, 0), window=self.col_config_scrollable_frame, anchor="nw"
+        )
+
+        def _on_frame_configure(event):
+            self.col_config_canvas.configure(
+                scrollregion=self.col_config_canvas.bbox("all")
+            )
+
+        self.col_config_scrollable_frame.bind("<Configure>", _on_frame_configure)
+        self.col_config_canvas.bind(
+            "<Configure>",
+            lambda e: self.col_config_canvas.itemconfigure(
+                self._col_config_window, width=e.width
+            ),
+        )
+
+        self.populate_column_config_tab()
+        return frame
+
     def create_howto_tab(self, notebook):
         """Provide a visually separated quick-start guide."""
 
@@ -783,6 +850,73 @@ class MergeApp(tk.Tk):
             anchor=tk.W,
             padding=10,
         ).grid(row=0, column=0, sticky=tk.W)
+
+        return frame
+
+    def create_supporting_doc_tab(self, notebook):
+        """Provide controls for selecting and distributing a supporting document."""
+
+        frame = ttk.Frame(notebook, padding=10)
+        frame.columnconfigure(0, weight=1)
+
+        intro = ttk.Label(
+            frame,
+            text=(
+                "Pick a single PDF or DOCX to copy into every account folder with a "
+                "custom suffix. Use this after your main merge so the extra material "
+                "travels with each appeal package."
+            ),
+            style="Subheading.TLabel",
+            wraplength=780,
+            justify=tk.LEFT,
+        )
+        intro.grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+
+        path_frame = ttk.LabelFrame(
+            frame, text="Supporting Document", style="Section.TLabelframe"
+        )
+        path_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=5)
+        path_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(path_frame, text="File Path:").grid(
+            row=0, column=0, padx=5, pady=5, sticky=tk.E
+        )
+        self.entry_support_doc = ttk.Entry(path_frame, width=70)
+        self.entry_support_doc.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.entry_support_doc.insert(0, self.app_config.get("supporting_doc_path", ""))
+
+        ttk.Button(
+            path_frame,
+            text="Browse...",
+            command=self.select_support_doc,
+        ).grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Label(path_frame, text="Filename Suffix:").grid(
+            row=1, column=0, padx=5, pady=5, sticky=tk.E
+        )
+        self.entry_support_suffix = ttk.Entry(path_frame, width=30)
+        self.entry_support_suffix.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        self.entry_support_suffix.insert(
+            0, self.app_config.get("supporting_doc_suffix", "addinfo")
+        )
+
+        helper = ttk.Label(
+            path_frame,
+            text="Suffix is inserted before the file extension (e.g., 010124.ABC.123.addinfo.pdf).",
+            foreground="#4a5568",
+        )
+        helper.grid(row=2, column=0, columnspan=3, padx=5, pady=(0, 5), sticky=tk.W)
+
+        action_frame = ttk.Frame(frame)
+        action_frame.grid(row=2, column=0, sticky=tk.EW, pady=10)
+        action_frame.columnconfigure(0, weight=1)
+        self.btn_run_support_doc = ttk.Button(
+            action_frame,
+            text="Copy Supporting Document",
+            command=self.start_support_doc_thread,
+            style="Primary.TButton",
+        )
+        self.btn_run_support_doc.grid(row=0, column=0, sticky=tk.EW)
 
         return frame
     def create_extraction_config_tab(self, notebook):
