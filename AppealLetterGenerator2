@@ -46,6 +46,11 @@ APP_SUBDIRECTORIES = [
 DEFAULT_EXTRACT_START = "According to"
 DEFAULT_EXTRACT_END = "Please review the attached"
 DEFAULT_BLURB_SUBJECT = "1st Underpayment Reconsideration"
+DEFAULT_FAX_INFO = {
+    "user_name": "PARS Recovery Unit",
+    "user_phone": "(800) 930-6387",
+    "user_fax": "(888) 437-7288",
+}
 
 
 def normalize_extracted_note_text(text):
@@ -287,11 +292,7 @@ class MergeApp(tk.Tk):
             "column_formats": {},
             "addresses": {},
             "blurbs": {},
-            "fax_info": {
-                "user_name": "",
-                "user_phone": "",
-                "user_fax": "",
-            },
+            "fax_info": DEFAULT_FAX_INFO.copy(),
             "special_cols": {"account_col": ""},
             "extract_config": {
                 "start": DEFAULT_EXTRACT_START,
@@ -314,6 +315,7 @@ class MergeApp(tk.Tk):
         self.bot_network_path = r"\\Intermix.nas1.us2.experian.corp\pars_rpa\HC82\Master_file\Individual Files"
         self.last_notes_file_path = None # Stores path of last generated notes file
         self.load_config()
+        self.enforce_fax_info_defaults()
         self.normalize_blurb_config()
         self.normalize_template_config()
         self.create_widgets()
@@ -387,6 +389,10 @@ class MergeApp(tk.Tk):
         self.app_config["templates"] = templates
         self.app_config["selected_templates"] = selected_templates
         self.app_config["form_templates"] = templates["form"]
+
+    def enforce_fax_info_defaults(self):
+        """Force sender contact info to static PARS Recovery Unit values."""
+        self.app_config["fax_info"] = DEFAULT_FAX_INFO.copy()
 
     def configure_window_geometry(self):
         """Set an initial window size that adapts to the user's screen."""
@@ -464,7 +470,6 @@ class MergeApp(tk.Tk):
         self.tab_blurb_editor = self.create_blurb_editor_tab() # New combined tab
         self.tab_payer_setup = self.create_payer_setup_tab() # New combined tab
         self.tab_forms = self.create_template_manager_tab()
-        self.tab_user_info = self.create_user_info_tab()
         self.tab_config = self.create_column_config_tab()
         # --- Logical Tab Order ---
         self.notebook.add(self.tab_main, text="Main")
@@ -473,7 +478,6 @@ class MergeApp(tk.Tk):
         self.notebook.add(self.tab_blurb_editor, text="Blurb Editor")
         self.notebook.add(self.tab_forms, text="Templates")
         self.notebook.add(self.tab_payer_setup, text="Payer Setup")
-        self.notebook.add(self.tab_user_info, text="My Contact Info")
         # --- End Logical Tab Order ---
         self.update_main_combos()
         self.update_preview_section()
@@ -1075,34 +1079,6 @@ class MergeApp(tk.Tk):
             ),
         )
         self.populate_listbox(address_listbox, address_dict)
-        return frame
-    # --- User Info Tab ---
-    def create_user_info_tab(self):
-        """Render the tab where users store their contact information."""
-        frame = ttk.Frame(self.notebook, padding=20)
-        user_frame = ttk.LabelFrame(frame, text="Your Info (Sender)")
-        user_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        self.user_info_entries = {}
-        self.user_info_entries["user_name"] = self.create_labeled_entry(
-            user_frame,
-            "Your Name:",
-            self.app_config["fax_info"].get("user_name", ""),
-            0,
-        )
-        self.user_info_entries["user_phone"] = self.create_labeled_entry(
-            user_frame,
-            "Your Phone:",
-            self.app_config["fax_info"].get("user_phone", ""),
-            1,
-        )
-        self.user_info_entries["user_fax"] = self.create_labeled_entry(
-            user_frame,
-            "Your Fax #:",
-            self.app_config["fax_info"].get("user_fax", ""),
-            2,
-        )
-        btn_save = ttk.Button(frame, text="Save Your Info", command=self.save_user_info)
-        btn_save.pack(pady=20)
         return frame
     # --- Template Manager Tab ---
     def create_template_manager_tab(self):
@@ -1899,21 +1875,11 @@ class MergeApp(tk.Tk):
         """Clear all payer contact editor input widgets."""
         for entry in editor_entries.values():
             entry.delete(0, tk.END)
-    # --- User Info Logic ---
-    def save_user_info(self):
-        """Persist the user's contact information from the entry widgets."""
-        for key, entry in self.user_info_entries.items():
-            self.app_config["fax_info"][
-                key
-            ] = entry.get()
-        self.save_config()
-        self.update_status_bar("Your Info saved.")
-        if hasattr(self, 'placeholder_text'): # Check if placeholder tab exists
-            self.update_placeholder_list()
     # --- Config (JSON) ---
     def save_config(self, event=None):
         """Write the current configuration dictionary to disk."""
         try:
+            self.enforce_fax_info_defaults()
             if hasattr(self, "column_widgets"):
                 for col, widgets in self.column_widgets.items():
                     self.app_config["column_formats"][col] = widgets["combo"].get()
@@ -2160,7 +2126,7 @@ class MergeApp(tk.Tk):
         self.placeholder_text.insert(tk.END, "{{BlurbBlock}} (From Blurbs tab)\n")
         self.placeholder_text.insert(tk.END, "{{SubjectBlock}} (From Blurbs tab)\n")
         self.placeholder_text.insert(
-            tk.END, "\n--- Sender Info (From 'Your Info' Tab) ---\n", "bold"
+            tk.END, "\n--- Sender Info (Hardcoded Defaults) ---\n", "bold"
         )
         user_keys = [k for k in self.app_config["fax_info"] if k.startswith("user_")]
         for key in sorted(user_keys):
