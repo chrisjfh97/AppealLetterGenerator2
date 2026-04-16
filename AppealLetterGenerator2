@@ -293,13 +293,10 @@ class MergeApp(tk.Tk):
                 "user_fax": "",
             },
             "special_cols": {"account_col": ""},
-            "supporting_doc_path": "",
-            "supporting_doc_suffix": "addinfo",
             "extract_config": {
                 "start": DEFAULT_EXTRACT_START,
                 "end": DEFAULT_EXTRACT_END,
             },
-            "user_notes": "",
             "cm_headings": {},
         }
         self.column_widgets = {}
@@ -308,8 +305,6 @@ class MergeApp(tk.Tk):
         self.progress_label_var = tk.StringVar(value="Ready.")
         self.error_queue = queue.Queue()
         self.error_entries = []
-        self.run_results = []
-        self.run_results_sort = {"column": "timestamp", "reverse": True}
         self._grid_weights = []
         self.current_task_total = 0
         self.current_task_completed = 0
@@ -466,25 +461,19 @@ class MergeApp(tk.Tk):
         # --- Create Tabs ---
         self.tab_main = self.create_main_tab()
         self.tab_extract_config = self.create_extraction_config_tab() # Now includes CM Headings
-        self.tab_support_doc = self.create_supporting_doc_tab()
         self.tab_blurb_editor = self.create_blurb_editor_tab() # New combined tab
         self.tab_payer_setup = self.create_payer_setup_tab() # New combined tab
         self.tab_forms = self.create_template_manager_tab()
         self.tab_user_info = self.create_user_info_tab()
         self.tab_config = self.create_column_config_tab()
-        self.tab_notes = self.create_notes_tab()
-        self.tab_run_results = self.create_run_results_tab()
         # --- Logical Tab Order ---
         self.notebook.add(self.tab_main, text="Main")
-        self.notebook.add(self.tab_support_doc, text="Supporting Documents")
         self.notebook.add(self.tab_extract_config, text="CM Note Extraction")
         self.notebook.add(self.tab_config, text="Column Configuration")
         self.notebook.add(self.tab_blurb_editor, text="Blurb Editor")
         self.notebook.add(self.tab_forms, text="Templates")
         self.notebook.add(self.tab_payer_setup, text="Payer Setup")
         self.notebook.add(self.tab_user_info, text="My Contact Info")
-        self.notebook.add(self.tab_notes, text="My Notes")
-        self.notebook.add(self.tab_run_results, text="Recent Run Results")
         # --- End Logical Tab Order ---
         self.update_main_combos()
         self.update_preview_section()
@@ -627,7 +616,7 @@ class MergeApp(tk.Tk):
         # --- Run Buttons ---
         run_frame = ttk.Frame(frame)
         run_frame.grid(row=2, column=0, sticky=tk.EW, pady=10)
-        for col in range(4):
+        for col in range(3):
             run_frame.columnconfigure(col, weight=1)
         self.btn_run_letters = ttk.Button(
             run_frame, text="Generate Appeal Letters", command=self.start_letter_merge_thread
@@ -641,13 +630,6 @@ class MergeApp(tk.Tk):
             run_frame, text="Generate Fax Coversheets", command=self.start_fax_merge_thread
         )
         self.btn_run_faxes.grid(row=0, column=2, sticky=tk.NSEW, padx=2, pady=2)
-        self.btn_clean_filenames = ttk.Button(
-            run_frame,
-            text="Remove Special Characters from\nfile names (Website Appeals)",
-            command=self.handle_clean_special_chars,
-        )
-        self.btn_clean_filenames.grid(row=0, column=3, sticky=tk.NSEW, padx=2, pady=2)
-
         progress_frame = ttk.LabelFrame(frame, text="Progress & Controls")
         progress_frame.grid(row=3, column=0, sticky=tk.EW, pady=5)
         progress_frame.columnconfigure(0, weight=1)
@@ -731,72 +713,6 @@ class MergeApp(tk.Tk):
         ).pack(pady=20)
         return frame
     # --- CLD SPLITTER ---
-    def create_supporting_doc_tab(self):
-        """Create the supporting document tools including CLD splitting."""
-        frame = ttk.Frame(self.notebook, padding=10)
-        # --- Frame 1: Standard Supporting Document ---
-        support_frame = ttk.LabelFrame(frame, text="Copy a Supporting Document into each Appeal folder")
-        support_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
-        self.register_grid_weights(support_frame, {1: 1})
-        self.entry_support_doc = self.create_file_entry(
-            support_frame,
-            "Supporting Doc:",
-            self.app_config.get("supporting_doc_path", ""),
-            self.select_support_doc,
-            0,
-        )
-        ttk.Label(support_frame, text="Filename Suffix:").grid(
-            row=1, column=0, padx=5, pady=10, sticky=tk.E
-        )
-        self.entry_support_suffix = ttk.Entry(support_frame, width=80)
-        self.entry_support_suffix.insert(
-            0, self.app_config.get("supporting_doc_suffix", "addinfo")
-        )
-        self.entry_support_suffix.grid(row=1, column=1, padx=5, pady=10, sticky=tk.EW)
-        btn_save = ttk.Button(
-            support_frame,
-            text="Save Settings",
-            command=self.save_config,
-        )
-        btn_save.grid(row=2, column=1, padx=5, pady=10, sticky=tk.W)
-        self.btn_run_support_doc = ttk.Button(
-            support_frame,
-            text="Copy Single Document to All Folders",
-            command=self.start_support_doc_thread,
-        )
-        self.btn_run_support_doc.grid(row=3,column=0,columnspan=3, padx=5, pady=10, sticky=tk.EW, ipady=8)
-        # --- Frame 2: CLD Splitter ---
-        cld_frame = ttk.LabelFrame(frame, text="Claim List Detail (CLD) Splitter")
-        cld_frame.pack(fill=tk.BOTH, expand=True, pady=10, padx=5)
-        self.register_grid_weights(cld_frame, {1: 1})
-        self.cld_file_var = tk.StringVar()
-        ttk.Label(cld_frame, text="CLD PDF File:").grid(
-            row=0, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.entry_cld_file = ttk.Entry(cld_frame, width=80, textvariable=self.cld_file_var)
-        self.entry_cld_file.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
-        btn_browse_cld = ttk.Button(
-            cld_frame,
-            text="Browse...",
-            command=self.select_cld_file
-        )
-        btn_browse_cld.grid(row=0, column=2, padx=5, pady=5)
-        self.btn_split_cld = ttk.Button(
-            cld_frame,
-            text="Split CLD File",
-            command=self.start_split_cld_thread,
-        )
-        self.btn_split_cld.grid(row=1, column=0, columnspan=3, padx=5, pady=10, sticky=tk.EW, ipady=8)
-        ttk.Label(
-            cld_frame,
-            text="This tool splits a single CLD PDF into multiple PDFs, one per claim.\n"
-                 "It uses the 'Output Folder', 'File Date', and 'Client Acronym' from the Main tab.\n"
-                 "It saves files as: [Date].[Client].[RefNum].cld.pdf",
-            justify=tk.LEFT,
-        ).grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
-        return frame
-    # --- END CLD SPLITTER ---
-    # --- REFACTORED: CM Note Extraction + CM Headings ---
     def create_extraction_config_tab(self):
         """Assemble the CM note extraction tab with configuration controls."""
         frame = ttk.Frame(self.notebook, padding=10)
@@ -973,113 +889,6 @@ class MergeApp(tk.Tk):
             ),
         )
         self.populate_listbox(heading_listbox, data_dict)
-        return frame
-    def create_notes_tab(self):
-        """Build the tab that stores user-authored personal notes."""
-        frame = ttk.Frame(self.notebook, padding=10)
-        notes_frame = ttk.LabelFrame(
-            frame,
-            text="My Notes (Use this section to save formulas, reminders, notes, and items you may want to reuse in the future)",
-        )
-        notes_frame.pack(fill=tk.BOTH, expand=True, pady=5, padx=5)
-        self.text_notes = tk.Text(notes_frame, wrap=tk.WORD, height=10, width=60)
-        self.text_notes.pack(fill=tk.BOTH, expand=True, side=tk.TOP, padx=5, pady=5)
-        self.text_notes.insert("1.0", self.app_config.get("user_notes", ""))
-        btn_save = ttk.Button(
-            notes_frame,
-            text="Save Notes",
-            command=self.save_user_notes,
-        )
-        btn_save.pack(side=tk.BOTTOM, pady=5, padx=5, fill=tk.X)
-        return frame
-    def create_run_results_tab(self):
-        """Build a tab that displays per-record run results with filters."""
-        frame = ttk.Frame(self.notebook, padding=10)
-        filter_frame = ttk.LabelFrame(frame, text="Filters")
-        filter_frame.pack(fill=tk.X, pady=(0, 10))
-        self.run_results_type_var = tk.StringVar(value="All")
-        self.run_results_status_var = tk.StringVar(value="All")
-        self.run_results_search_var = tk.StringVar()
-        ttk.Label(filter_frame, text="Run Type:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.E)
-        type_options = ["All", "Letters", "Forms", "Faxes", "Supporting Docs"]
-        self.combo_run_type_filter = ttk.Combobox(
-            filter_frame,
-            state="readonly",
-            width=20,
-            values=type_options,
-            textvariable=self.run_results_type_var,
-        )
-        self.combo_run_type_filter.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
-        ttk.Label(filter_frame, text="Status:").grid(row=0, column=2, padx=5, pady=5, sticky=tk.E)
-        self.combo_run_status_filter = ttk.Combobox(
-            filter_frame,
-            state="readonly",
-            width=15,
-            values=["All", "Success", "Error"],
-            textvariable=self.run_results_status_var,
-        )
-        self.combo_run_status_filter.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
-        ttk.Label(filter_frame, text="Account Search:").grid(row=0, column=4, padx=5, pady=5, sticky=tk.E)
-        entry_search = ttk.Entry(filter_frame, width=25, textvariable=self.run_results_search_var)
-        entry_search.grid(row=0, column=5, padx=5, pady=5, sticky=tk.W)
-        btn_apply = ttk.Button(
-            filter_frame,
-            text="Apply Filters",
-            command=self.apply_run_results_filter,
-        )
-        btn_apply.grid(row=0, column=6, padx=5, pady=5)
-        btn_reset = ttk.Button(
-            filter_frame,
-            text="Reset",
-            command=self.reset_run_results_filter,
-        )
-        btn_reset.grid(row=0, column=7, padx=5, pady=5)
-        for col in range(8):
-            filter_frame.columnconfigure(col, weight=1)
-        table_frame = ttk.Frame(frame)
-        table_frame.pack(fill=tk.BOTH, expand=True)
-        columns = (
-            "timestamp",
-            "run_type",
-            "account_number",
-            "status",
-            "output_path",
-            "error_message",
-        )
-        self.run_results_tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings", selectmode="browse"
-        )
-        headings = {
-            "timestamp": "Timestamp",
-            "run_type": "Run Type",
-            "account_number": "Account #",
-            "status": "Status",
-            "output_path": "Output Path",
-            "error_message": "Error Message",
-        }
-        for col in columns:
-            self.run_results_tree.heading(
-                col, text=headings[col], command=lambda c=col: self.sort_run_results_by(c)
-            )
-            self.run_results_tree.column(col, width=140, anchor=tk.W)
-        scroll_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.run_results_tree.yview)
-        scroll_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.run_results_tree.xview)
-        self.run_results_tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-        self.run_results_tree.grid(row=0, column=0, sticky=tk.NSEW)
-        scroll_y.grid(row=0, column=1, sticky=tk.NS)
-        scroll_x.grid(row=1, column=0, sticky=tk.EW)
-        table_frame.rowconfigure(0, weight=1)
-        table_frame.columnconfigure(0, weight=1)
-        action_frame = ttk.Frame(frame)
-        action_frame.pack(fill=tk.X, pady=10)
-        ttk.Button(action_frame, text="Open Output", command=self.open_selected_output).pack(
-            side=tk.LEFT, padx=5
-        )
-        ttk.Button(action_frame, text="View Error Details", command=self.view_selected_error).pack(
-            side=tk.LEFT, padx=5
-        )
-        self.run_results_tree.bind("<Double-1>", lambda event: self.open_selected_output())
-        self.refresh_run_results_view()
         return frame
     def create_list_manager_tab(self, name, data_dict):
         """Create a generic list editor used for templated text content."""
@@ -1768,30 +1577,6 @@ class MergeApp(tk.Tk):
             self.entry_detail_report.delete(0, tk.END)
             self.entry_detail_report.insert(0, filepath)
     # --- END DETAIL REPORT CLEANER ---
-    def select_support_doc(self):
-        """Prompt the user to choose a supporting document for distribution."""
-        filepath = filedialog.askopenfilename(
-            title="Select Supporting Document",
-            filetypes=[
-                ("All Files", "*.*"),
-                ("PDF Documents", "*.pdf"),
-                ("Word Documents", "*.docx"),
-            ],
-        )
-        if filepath:
-            self.entry_support_doc.delete(0, tk.END)
-            self.entry_support_doc.insert(0, filepath)
-            self.save_config()
-    # --- CLD SPLITTER ---
-    def select_cld_file(self):
-        """Opens file dialog to select the CLD PDF file."""
-        filepath = filedialog.askopenfilename(
-            title="Select CLD PDF File",
-            filetypes=[("PDF Files", "*.pdf")]
-        )
-        if filepath:
-            self.cld_file_var.set(filepath) # Use the stringvar to update the entry
-    # --- END CLD SPLITTER ---
     def save_extract_config(self):
         """Persist the CM note extraction start/end markers to disk."""
         start_text = self.entry_extract_start.get()
@@ -1851,140 +1636,6 @@ class MergeApp(tk.Tk):
             self.preview_cm_heading_text.config(state=tk.DISABLED)
         except Exception as e:
             print(f"Error updating preview: {e}")
-    def save_user_notes(self):
-        """Save the personal notes content to the configuration file."""
-        notes_content = self.text_notes.get("1.0", tk.END).strip()
-        self.app_config["user_notes"] = notes_content
-        self.save_config()
-        self.update_status_bar("Notes saved.")
-    # --- Run Results Helpers ---
-    def apply_run_results_filter(self):
-        """Refresh the run results view using the current filter values."""
-        self.refresh_run_results_view()
-
-    def reset_run_results_filter(self):
-        """Reset filters to their default values."""
-        self.run_results_type_var.set("All")
-        self.run_results_status_var.set("All")
-        self.run_results_search_var.set("")
-        self.run_results_sort = {"column": "timestamp", "reverse": True}
-        self.refresh_run_results_view()
-
-    def get_filtered_run_results(self):
-        """Return run results filtered by type, status, and account search."""
-        type_filter = self.run_results_type_var.get()
-        status_filter = self.run_results_status_var.get()
-        search_text = self.run_results_search_var.get().strip().lower()
-        filtered = []
-        for entry in self.run_results:
-            if type_filter != "All" and entry["run_type"] != type_filter:
-                continue
-            if status_filter != "All" and entry["status"] != status_filter:
-                continue
-            if search_text and search_text not in entry["account_number"].lower():
-                continue
-            filtered.append(entry)
-        return filtered
-
-    def sort_run_results_by(self, column):
-        """Toggle sorting on the given column and refresh the view."""
-        if self.run_results_sort["column"] == column:
-            self.run_results_sort["reverse"] = not self.run_results_sort["reverse"]
-        else:
-            self.run_results_sort = {"column": column, "reverse": False}
-        self.refresh_run_results_view()
-
-    def refresh_run_results_view(self):
-        """Populate the run results table with filtered and sorted data."""
-        if not hasattr(self, "run_results_tree"):
-            return
-        for item in self.run_results_tree.get_children():
-            self.run_results_tree.delete(item)
-        results = self.get_filtered_run_results()
-        column = self.run_results_sort.get("column", "timestamp")
-        reverse = self.run_results_sort.get("reverse", False)
-        def sort_key(entry):
-            value = entry.get(column)
-            if value is None:
-                return ""
-            return value
-        results.sort(key=sort_key, reverse=reverse)
-        for entry in results:
-            timestamp_str = entry["timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-            self.run_results_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    timestamp_str,
-                    entry["run_type"],
-                    entry["account_number"],
-                    entry["status"],
-                    entry.get("output_path", ""),
-                    entry.get("error_message", ""),
-                ),
-            )
-
-    def record_run_result(
-        self, run_type, account_number, status, output_path="", error_message=""
-    ):
-        """Store a run result entry and update the view on the UI thread."""
-        entry = {
-            "timestamp": datetime.now(),
-            "run_type": run_type,
-            "account_number": str(account_number),
-            "status": status,
-            "output_path": output_path or "",
-            "error_message": error_message or "",
-        }
-        self.after(0, lambda e=entry: self._append_run_result(e))
-
-    def _append_run_result(self, entry):
-        self.run_results.append(entry)
-        self.refresh_run_results_view()
-
-    def open_selected_output(self):
-        """Open the output file/folder for the selected run result."""
-        selection = self.run_results_tree.selection()
-        if not selection:
-            messagebox.showinfo("Open Output", "Please select a run result first.")
-            return
-        item = selection[0]
-        values = self.run_results_tree.item(item, "values")
-        output_path = values[4]
-        if not output_path:
-            messagebox.showwarning("Open Output", "No output path recorded for this entry.")
-            return
-        if not os.path.exists(output_path):
-            messagebox.showwarning(
-                "Open Output", f"The path does not exist:\n{output_path}"
-            )
-            return
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(output_path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", output_path])
-            else:
-                subprocess.Popen(["xdg-open", output_path])
-        except Exception as exc:
-            messagebox.showerror(
-                "Open Output", f"Failed to open path:\n{output_path}\n\n{exc}"
-            )
-
-    def view_selected_error(self):
-        """Show a dialog with the error message for the selected entry."""
-        selection = self.run_results_tree.selection()
-        if not selection:
-            messagebox.showinfo("Error Details", "Please select a run result first.")
-            return
-        item = selection[0]
-        values = self.run_results_tree.item(item, "values")
-        error_message = values[5]
-        if not error_message:
-            messagebox.showinfo("Error Details", "No error message recorded for this entry.")
-            return
-        messagebox.showinfo("Error Details", error_message)
-    # --- List Manager (Address/Blurb/CM Heading) Logic ---
     def populate_listbox(self, listbox, data_dict):
         """Populate a listbox with the sorted keys of a dictionary."""
         listbox.delete(0, tk.END)
@@ -2289,12 +1940,6 @@ class MergeApp(tk.Tk):
                 self.app_config["selected_templates"]["form"] = selected_form
             if hasattr(self, "entry_output"):
                 self.app_config["output_path"] = self.entry_output.get()
-            if hasattr(self, "entry_support_doc"):
-                self.app_config["supporting_doc_path"] = self.entry_support_doc.get()
-            if hasattr(self, "entry_support_suffix"):
-                self.app_config["supporting_doc_suffix"] = (
-                    self.entry_support_suffix.get()
-                )
             self.app_config["form_templates"] = self.get_template_mapping("form")
             with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.app_config, f, indent=4)
@@ -2694,8 +2339,6 @@ class MergeApp(tk.Tk):
     # --- Shared Validation Function ---
     def validate_common_inputs(self):
         """Validate shared input fields before running merge operations."""
-        self.app_config["supporting_doc_path"] = self.entry_support_doc.get()
-        self.app_config["supporting_doc_suffix"] = self.entry_support_suffix.get()
         self.save_config()
         self.excel_path = self.entry_excel.get()
         self.output_path = self.entry_output.get()
@@ -2898,34 +2541,24 @@ class MergeApp(tk.Tk):
             letter_text = "Merging Appeal Letters..."
             form_text = "Generating Forms..."
             fax_text = "Generating Fax Coversheets..."
-            support_doc_text = "Copying Supporting Document..."
             extract_text = "Extracting CM Notes..."
             clean_text = "Cleaning Report..."
             send_bot_text = "Sending to Bot..."
-            split_cld_text = "Splitting CLD File..."
-            clean_filenames_text = "Removing Special Characters..."
         else:  # "normal"
             button_state = tk.NORMAL
             letter_text = "Generate Appeal Letters"
             form_text = "Generate Forms"
             fax_text = "Generate Fax Coversheets"
-            support_doc_text = "Copy Supporting Document"
             extract_text = "Extract CM Notes"
             clean_text = "Clean Report"
             send_bot_text = "Send Notes to Bot (Professional Only)"
-            split_cld_text = "Split CLD File"
-            clean_filenames_text = "Remove Special Characters (File Names - Website Appeals)"
         self.btn_run_letters.config(text=letter_text, state=button_state)
         self.btn_run_forms.config(text=form_text, state=button_state)
         self.btn_run_faxes.config(text=fax_text, state=button_state)
-        if hasattr(self, "btn_run_support_doc"):
-            self.btn_run_support_doc.config(text=support_doc_text, state=button_state)
         if hasattr(self, "btn_extract_notes"):
             self.btn_extract_notes.config(text=extract_text, state=button_state)
         if hasattr(self, "btn_clean_report"):
             self.btn_clean_report.config(text=clean_text, state=button_state)
-        if hasattr(self, "btn_clean_filenames"):
-            self.btn_clean_filenames.config(text=clean_filenames_text, state=button_state)
         if hasattr(self, "btn_send_to_bot"):
             if state == "normal":
                 if self.last_notes_file_path:
@@ -2934,8 +2567,6 @@ class MergeApp(tk.Tk):
                     self.btn_send_to_bot.config(text=send_bot_text, state=tk.DISABLED)
             else:
                 self.btn_send_to_bot.config(text=send_bot_text, state=button_state)
-        if hasattr(self, "btn_split_cld"):
-            self.btn_split_cld.config(text=split_cld_text, state=button_state)
         if hasattr(self, "btn_cancel_tasks"):
             cancel_state = tk.DISABLED if state == "normal" else tk.NORMAL
             self.btn_cancel_tasks.config(state=cancel_state)
@@ -3536,31 +3167,6 @@ class MergeApp(tk.Tk):
                 }
             )
         return tasks
-    def start_support_doc_thread(self):
-        """Starts the thread for copying the supporting document."""
-        if not self.validate_common_inputs():
-            return
-        self.support_doc_path = self.app_config.get("supporting_doc_path", "")
-        self.support_doc_suffix = self.app_config.get(
-            "supporting_doc_suffix", "addinfo"
-        )
-        if not self.support_doc_path or not os.path.exists(self.support_doc_path):
-            messagebox.showerror(
-                "Error",
-                "Please select a valid 'Supporting Doc' from the 'Supporting Doc' tab.",
-            )
-            self.notebook.select(self.tab_support_doc)
-            return
-        if not self.support_doc_suffix:
-            messagebox.showerror(
-                "Error",
-                "Please provide a 'Filename Suffix' in the 'Supporting Doc' tab.",
-            )
-            self.notebook.select(self.tab_support_doc)
-            return
-        self.set_buttons_state("disabled")
-        threading.Thread(target=self.run_support_doc_merge, daemon=True).start()
-    # --- DETAIL REPORT CLEANER ---
     def start_clean_report_thread(self):
         """Validates path and starts the report cleaning thread."""
         self.detail_report_path = self.entry_detail_report.get()
@@ -3571,106 +3177,6 @@ class MergeApp(tk.Tk):
         self.q_print("Starting detail report cleanup...")
         threading.Thread(target=self.run_clean_report, daemon=True).start()
     # --- END DETAIL REPORT CLEANER ---
-    # --- FILE NAME CLEANUP ---
-    def handle_clean_special_chars(self):
-        """Warn the user and start the filename cleanup process."""
-        warning_message = (
-            "This will remove dashes, periods, and spaces from file names in the selected "
-            "folder (and its subfolders). Please extract CM Notes first, as renaming files "
-            "may impact the note extraction process.\n\nDo you want to continue?"
-        )
-        if not messagebox.askokcancel("Warning", warning_message):
-            return
-        target_folder = self.entry_output.get().strip()
-        if not target_folder or not os.path.isdir(target_folder):
-            initial = target_folder if target_folder and os.path.isdir(target_folder) else str(BASE_DIR)
-            target_folder = filedialog.askdirectory(
-                parent=self,
-                title="Select folder to clean file names",
-                initialdir=initial,
-            )
-        if not target_folder:
-            return
-        self.set_buttons_state("disabled")
-        self.q_print("Starting filename cleanup...")
-        threading.Thread(
-            target=self.run_clean_special_chars,
-            args=(target_folder,),
-            daemon=True,
-        ).start()
-    def run_clean_special_chars(self, root_folder):
-        """Remove selected special characters from filenames under root_folder."""
-        renamed_count = 0
-        skipped_count = 0
-        try:
-            for dirpath, _, filenames in os.walk(root_folder):
-                for filename in filenames:
-                    new_name = self.generate_clean_filename(filename)
-                    if not new_name:
-                        skipped_count += 1
-                        continue
-                    if new_name == filename:
-                        continue
-                    src = os.path.join(dirpath, filename)
-                    dst = self.resolve_unique_filename(dirpath, new_name)
-                    if dst is None:
-                        skipped_count += 1
-                        continue
-                    try:
-                        os.rename(src, dst)
-                        renamed_count += 1
-                    except OSError as exc:
-                        logging.error(
-                            "Failed to rename '%s' -> '%s': %s",
-                            src,
-                            dst,
-                            exc,
-                            exc_info=True,
-                        )
-                        skipped_count += 1
-            summary = (
-                f"Filename cleanup complete. {renamed_count} file(s) renamed."
-                f"{' ' + str(skipped_count) + ' file(s) skipped.' if skipped_count else ''}"
-                f"\nLocation: {root_folder}"
-            )
-            self.q_print(summary)
-            messagebox.showinfo("Completed", summary)
-        except Exception as exc:  # Catch-all to surface unexpected errors
-            logging.error("Unexpected error during filename cleanup: %s", exc, exc_info=True)
-            messagebox.showerror("Filename Cleanup Failed", f"An error occurred:\n{exc}")
-        finally:
-            self.set_buttons_state("normal")
-    def generate_clean_filename(self, filename):
-        """Return a sanitized filename (without path)."""
-        name, ext = os.path.splitext(filename)
-        cleaned = re.sub(r"[-.\s]", "", name)
-        if not cleaned:
-            logging.warning(
-                "Skipping file '%s' because removing special characters would "
-                "result in an empty name.",
-                filename,
-            )
-            return None
-        return f"{cleaned}{ext}"
-    def resolve_unique_filename(self, directory, filename):
-        """Ensure destination filename does not overwrite existing files."""
-        base, ext = os.path.splitext(filename)
-        candidate = os.path.join(directory, filename)
-        if not os.path.exists(candidate):
-            return candidate
-        counter = 1
-        while counter < 1000:
-            new_candidate = os.path.join(directory, f"{base}_{counter}{ext}")
-            if not os.path.exists(new_candidate):
-                return new_candidate
-            counter += 1
-        logging.error(
-            "Unable to resolve a unique filename for '%s' in '%s' after 999 attempts.",
-            filename,
-            directory,
-        )
-        return None
-    # --- END FILE NAME CLEANUP ---
     # --- NOTE EXTRACTION V2 (New functions) ---
     def start_send_to_bot_thread(self):
         """Confirms and starts the thread to copy the notes file to the network."""
@@ -3714,164 +3220,6 @@ class MergeApp(tk.Tk):
                 page_breaks.append(i)
         doc.close()
         return page_breaks
-    def start_split_cld_thread(self):
-        """Validates paths and starts the CLD splitting thread."""
-        cld_path = self.cld_file_var.get()
-        output_folder = self.entry_output.get()
-        date_str = self.entry_file_date.get()
-        client_str = self.entry_client_acronym.get()
-        if not cld_path or not os.path.exists(cld_path):
-            messagebox.showerror("Error", "Please select a valid CLD PDF file first.")
-            return
-        if not output_folder or not date_str or not client_str:
-            messagebox.showerror("Error", "Please fill out 'Output Folder', 'File Date', and 'Client Acronym' on the 'Main' tab first.")
-            self.notebook.select(self.tab_main)
-            return
-        self.set_buttons_state("disabled")
-        self.q_print("Starting CLD file splitting...")
-        threading.Thread(
-            target=self.run_split_cld,
-            args=(cld_path, output_folder, date_str, client_str),
-            daemon=True
-        ).start()
-    def run_split_cld(self, file_path, output_folder, date_str, client_str):
-        """Execute the PDF splitting process. (Adapted from user code)"""
-        delimit_str = "."
-        suffix_str = "cld"
-        base_output_path = os.path.join(output_folder, date_str)
-        try:
-            doc = fitz.open(file_path)
-            num_pages = len(doc)
-            page_breaks = self.get_page_breaks(file_path)
-            if not page_breaks:
-                messagebox.showerror(
-                    "Error",
-                    "The text 'total reimbursement' was not found in this PDF.\n\n"
-                    "Please verify that the correct PDF was selected."
-                )
-                doc.close()
-                return
-            i = 0
-            file_count = 0
-            while i < num_pages:
-                if page_breaks:
-                    end = page_breaks.pop(0)
-                else:
-                    end = num_pages - 1
-                if i > end:
-                    break
-                start = i
-                new_doc = fitz.open()
-                new_doc.insert_pdf(doc, from_page=start, to_page=end)
-                # Extract refnum from the last page of the section
-                text = doc[end].get_text()
-                # Original regex: r"\s*\(\s*(.*?)\s*\)\s*- F"
-                match = re.search(r"\s*\(\s*(.*?)\s*\)\s*- F", text)
-                if match:
-                    refnum = match.group(1).strip()
-                    # Sanitize refnum just in case
-                    refnum = re.sub(r'[<>:"/\\|?*]', "", refnum)
-                    # Create the subfolder path inside the day's output
-                    path = os.path.join(base_output_path, refnum)
-                    if not os.path.exists(path):
-                        os.makedirs(path)
-                    # Build the final file name
-                    final_name = f"{date_str}{delimit_str}{client_str}{delimit_str}{refnum}{delimit_str}{suffix_str}.pdf"
-                    final_path = os.path.join(path, final_name)
-                    try:
-                        new_doc.save(final_path)
-                        file_count += 1
-                        self.q_print(f"Saved: {final_name}")
-                    except Exception as e:
-                        self.q_print(f"ERROR: Failed to save {final_name}: {str(e)}")
-                        messagebox.showerror("File Save Error", f"Failed to save {final_name}: {str(e)}")
-                else:
-                    self.q_print(f"WARNING: Refnum not found on page {end+1}. Skipping this section.")
-                new_doc.close()
-                i = end + 1
-            doc.close()
-            self.q_print(f"CLD Split complete. {file_count} files created.")
-            messagebox.showinfo("Completed", f"CLD Split complete.\n{file_count} files created in: {base_output_path}")
-        except Exception as e:
-            self.q_print(f"Error during CLD split: {e}")
-            messagebox.showerror("CLD Split Failed", f"An error occurred:\n{e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.set_buttons_state("normal")
-    # --- END CLD SPLITTER ---
-    def run_support_doc_merge(self):
-        """Task: Copy supporting document to all subfolders."""
-        try:
-            # This validation *must* happen here, as it needs self.df
-            if not self.validate_common_inputs():
-                return # This will show the error about needing excel, etc.
-            total_rows = len(self.df)
-            copied_count = 0
-            skipped_count = 0
-            errors = []
-            for index, row in self.df.iterrows():
-                self.q_print(f"Processing doc copy {index + 1}/{total_rows}...")
-                output_path = ""
-                account_folder = ""
-                account_number = ""
-                try:
-                    account_number = str(row[self.account_col_name])
-                    day_folder = os.path.join(self.output_path, self.file_date_str)
-                    account_folder = os.path.join(day_folder, account_number)
-                    os.makedirs(account_folder, exist_ok=True)
-                    _, ext = os.path.splitext(self.support_doc_path)
-                    dest_basename = f"{self.file_date_str}.{self.client_acronym_str}.{account_number}.{self.support_doc_suffix}{ext}"
-                    output_path = os.path.join(account_folder, dest_basename)
-                    if not os.path.exists(output_path):
-                        shutil.copy2(self.support_doc_path, output_path)
-                        copied_count += 1
-                        self.record_run_result(
-                            "Supporting Docs",
-                            account_number,
-                            "Success",
-                            output_path=output_path,
-                        )
-                    else:
-                        skipped_count += 1
-                        self.record_run_result(
-                            "Supporting Docs",
-                            account_number,
-                            "Success",
-                            output_path=output_path,
-                            error_message="File already existed (skipped copy).",
-                        )
-                except Exception as e:
-                    errors.append(account_number or f"Row {index + 1}")
-                    self.q_print(f" WARN: Failed to copy doc for {account_number}: {e}")
-                    self.record_run_result(
-                        "Supporting Docs",
-                        account_number,
-                        "Error",
-                        output_path=output_path or account_folder,
-                        error_message=str(e),
-                    )
-            self.q_print(
-                f"Document copying complete. Copied: {copied_count}, Skipped: {skipped_count}"
-            )
-            if errors:
-                messagebox.showwarning(
-                    "Document Copy Completed with Issues",
-                    "Document copy completed with some errors. Check the 'Recent Run Results' tab for details.",
-                )
-            else:
-                messagebox.showinfo(
-                    "Success",
-                    f"Supporting document copying complete.\n\n"
-                    f"New files copied: {copied_count}\n"
-                    f"Files skipped (already exist): {skipped_count}",
-                )
-        except Exception as e:
-            self.q_print(f"Error during document copying: {e}")
-            messagebox.showerror("Document Copy Failed", f"An error occurred:\n{e}")
-        finally:
-            self.set_buttons_state("normal")
-    # --- DETAIL REPORT CLEANER (FIXED) ---
     def run_clean_report(self):
         """Runs the provided pandas script to clean the detail report."""
         file_path = self.detail_report_path
@@ -4188,12 +3536,6 @@ class MergeApp(tk.Tk):
                     if not output_path:
                         raise Exception("Failed to create letter document.")
                     completed += 1
-                    self.record_run_result(
-                        "Letters",
-                        account_number,
-                        "Success",
-                        output_path=output_path,
-                    )
                 except Exception as entry_error:
                     errors.append(account_number or f"Row {index + 1}")
                     logging.error(
@@ -4202,20 +3544,13 @@ class MergeApp(tk.Tk):
                         entry_error,
                         exc_info=True,
                     )
-                    self.record_run_result(
-                        "Letters",
-                        account_number,
-                        "Error",
-                        output_path=output_path or account_folder,
-                        error_message=str(entry_error),
-                    )
                     continue
             self.q_print("Letter merge completed successfully!")
             if errors:
                 messagebox.showwarning(
                     "Letter Merge Completed with Issues",
                     "Letter merge completed with some errors. Check the "
-                    "'Recent Run Results' tab for details.",
+                    "status log for details.",
                 )
             else:
                 messagebox.showinfo("Success", "Letter merge completed.")
@@ -4223,14 +3558,6 @@ class MergeApp(tk.Tk):
             self.q_print(f"Error during letter merge: {e}")
             self.finalize_progress("Letter merge encountered an error.")
             messagebox.showerror("Letter Merge Failed", f"An error occurred:\n{e}")
-            if "account_number" in locals():
-                self.record_run_result(
-                    "Letters",
-                    locals().get("account_number", ""),
-                    "Error",
-                    output_path=output_path if "output_path" in locals() else "",
-                    error_message=str(e),
-                )
         finally:
             self.set_buttons_state("normal")
     def run_form_merge(self, tasks):
@@ -4261,12 +3588,6 @@ class MergeApp(tk.Tk):
                     if not output_path:
                         raise Exception("Failed to create form document.")
                     completed += 1
-                    self.record_run_result(
-                        "Forms",
-                        account_number,
-                        "Success",
-                        output_path=output_path,
-                    )
                 except Exception as entry_error:
                     errors.append(account_number or f"Row {index + 1}")
                     logging.error(
@@ -4275,19 +3596,12 @@ class MergeApp(tk.Tk):
                         entry_error,
                         exc_info=True,
                     )
-                    self.record_run_result(
-                        "Forms",
-                        account_number,
-                        "Error",
-                        output_path=output_path or account_folder,
-                        error_message=str(entry_error),
-                    )
                     continue
             self.q_print("Form generation completed successfully!")
             if errors:
                 messagebox.showwarning(
                     "Form Generation Completed with Issues",
-                    "Form generation completed with some errors. Check the 'Recent Run Results' tab for details.",
+                    "Form generation completed with some errors. Review the status log for details.",
                 )
             else:
                 messagebox.showinfo("Success", "Form generation completed.")
@@ -4325,12 +3639,6 @@ class MergeApp(tk.Tk):
                     )
                     if not output_path:
                         raise Exception("Failed to create fax document.")
-                    self.record_run_result(
-                        "Faxes",
-                        account_number,
-                        "Success",
-                        output_path=output_path,
-                    )
                 except Exception as entry_error:
                     errors.append(account_number or f"Row {index + 1}")
                     logging.error(
@@ -4339,19 +3647,12 @@ class MergeApp(tk.Tk):
                         entry_error,
                         exc_info=True,
                     )
-                    self.record_run_result(
-                        "Faxes",
-                        account_number,
-                        "Error",
-                        output_path=output_path or account_folder,
-                        error_message=str(entry_error),
-                    )
                     continue
             self.q_print("Fax generation completed successfully!")
             if errors:
                 messagebox.showwarning(
                     "Fax Generation Completed with Issues",
-                    "Fax generation completed with some errors. Check the 'Recent Run Results' tab for details.",
+                    "Fax generation completed with some errors. Review the status log for details.",
                 )
             else:
                 messagebox.showinfo("Success", "Fax generation completed.")
