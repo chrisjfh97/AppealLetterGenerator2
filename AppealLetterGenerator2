@@ -307,6 +307,7 @@ class MergeApp(tk.Tk):
                 "start": DEFAULT_EXTRACT_START,
                 "end": DEFAULT_EXTRACT_END,
             },
+            "cm_headings": {},
             "mapping_rows": [],
             "acronym_rows": [],
         }
@@ -528,6 +529,23 @@ class MergeApp(tk.Tk):
         self.entry_file_date = ttk.Entry(select_frame, width=40)
         self.entry_file_date.grid(row=1, column=3, padx=5, pady=5, sticky=tk.EW)
         self.entry_file_date.insert(0, datetime.now().strftime("%m%d%y"))
+
+        sample_btn_frame = ttk.Frame(select_frame)
+        sample_btn_frame.grid(row=2, column=0, columnspan=4, sticky=tk.EW, pady=(5, 0))
+        sample_btn_frame.columnconfigure(0, weight=1)
+        sample_btn_frame.columnconfigure(1, weight=1)
+        self.btn_sample_letter = ttk.Button(
+            sample_btn_frame,
+            text="Generate Sample Letter",
+            command=self.generate_sample_letter,
+        )
+        self.btn_sample_letter.grid(row=0, column=0, sticky=tk.EW, padx=3, pady=2)
+        self.btn_sample_form = ttk.Button(
+            sample_btn_frame,
+            text="Generate Sample Form",
+            command=self.generate_sample_form,
+        )
+        self.btn_sample_form.grid(row=0, column=1, sticky=tk.EW, padx=3, pady=2)
 
         select_frame.grid_columnconfigure(0, weight=0)
         select_frame.grid_columnconfigure(1, weight=1)
@@ -1092,6 +1110,10 @@ class MergeApp(tk.Tk):
         if hasattr(self, 'combo_blurb'):
             self.combo_blurb["values"] = blurb_keys
             self.combo_blurb.set("(None)")
+        if hasattr(self, 'combo_cm_heading'):
+            heading_keys = ["(None)"] + sorted(list(self.app_config["cm_headings"].keys()))
+            self.combo_cm_heading["values"] = heading_keys
+            self.combo_cm_heading.set("(None)")
 
     def get_blurb_payload(self, blurb_key):
         """Return the blurb body and subject for the selected key."""
@@ -1362,6 +1384,98 @@ class MergeApp(tk.Tk):
         """Reset the template editor fields to empty values."""
         entry_name.delete(0, tk.END)
         entry_path.delete(0, tk.END)
+    def refresh_mapping_views(self):
+        """Refresh mapping and acronym trees from config state."""
+        if hasattr(self, "mapping_tree"):
+            for item in self.mapping_tree.get_children():
+                self.mapping_tree.delete(item)
+            for row in self.app_config.get("mapping_rows", []):
+                values = [row.get(col, "") for col in self.mapping_columns]
+                self.mapping_tree.insert("", tk.END, values=values)
+        if hasattr(self, "acronym_tree"):
+            for item in self.acronym_tree.get_children():
+                self.acronym_tree.delete(item)
+            for row in self.app_config.get("acronym_rows", []):
+                values = [row.get(col, "") for col in self.acronym_columns]
+                self.acronym_tree.insert("", tk.END, values=values)
+
+    def _prompt_for_values(self, title, columns, initial=None):
+        values = {}
+        for col in columns:
+            default = "" if not initial else str(initial.get(col, ""))
+            result = simpledialog.askstring(title, f"{col}:", initialvalue=default, parent=self)
+            if result is None:
+                return None
+            values[col] = result.strip()
+        return values
+
+    def import_mapping_rows(self):
+        filepath = filedialog.askopenfilename(
+            title="Import Mapping Table",
+            filetypes=[("Excel Files", "*.xlsx *.xls"), ("CSV Files", "*.csv")],
+        )
+        if not filepath:
+            return
+        try:
+            if filepath.lower().endswith(".csv"):
+                df_map = pd.read_csv(filepath)
+            else:
+                df_map = pd.read_excel(filepath)
+            rows = []
+            for _, row in df_map.iterrows():
+                entry = {col: "" if pd.isna(row.get(col, "")) else str(row.get(col, "")).strip() for col in self.mapping_columns}
+                rows.append(entry)
+            self.app_config["mapping_rows"] = rows
+            self.refresh_mapping_views()
+            self.save_config()
+        except Exception as exc:
+            messagebox.showerror("Import Failed", f"Unable to import mapping data:\n{exc}")
+
+    def edit_mapping_row(self, edit=False):
+        rows = self.app_config.get("mapping_rows", [])
+        initial = None
+        selected_iid = None
+        if edit:
+            selected = self.mapping_tree.selection() if hasattr(self, "mapping_tree") else []
+            if not selected:
+                messagebox.showerror("Error", "Please select a mapping row to edit.")
+                return
+            selected_iid = selected[0]
+            values = self.mapping_tree.item(selected_iid, "values")
+            initial = dict(zip(self.mapping_columns, values))
+        values = self._prompt_for_values("Mapping Row", self.mapping_columns, initial)
+        if values is None:
+            return
+        if edit and selected_iid:
+            idx = self.mapping_tree.index(selected_iid)
+            rows[idx] = values
+        else:
+            rows.append(values)
+        self.app_config["mapping_rows"] = rows
+        self.refresh_mapping_views()
+        self.save_config()
+
+    def remove_mapping_row(self):
+        selected = self.mapping_tree.selection() if hasattr(self, "mapping_tree") else []
+        if not selected:
+            return
+        selected_name = listbox.get(selected_indices[0])
+        if selected_name in data_dict:
+            if messagebox.askyesno(
+                "Confirm Delete",
+                f"Are you sure you want to delete Payer Contact '{selected_name}'?",
+            ):
+                del data_dict[selected_name]
+                self.save_config()
+                self.populate_listbox(listbox, data_dict)
+                self.clear_payer_editor(editor_entries)
+                self.update_main_combos()
+                self.update_status_bar(f"Payer Contact '{selected_name}' deleted.")
+    def clear_payer_editor(self, editor_entries):
+        """Clear all payer contact editor input widgets."""
+        for entry in editor_entries.values():
+            entry.delete(0, tk.END)
+
     def refresh_mapping_views(self):
         """Refresh mapping and acronym trees from config state."""
         if hasattr(self, "mapping_tree"):
@@ -2108,6 +2222,222 @@ class MergeApp(tk.Tk):
     # --- Merge Threads ---
     def start_generate_appeals_thread(self):
         """Start unified generation flow for letters plus form/fax per mapping."""
+        if not self.validate_common_inputs():
+            return
+        self.set_buttons_state("disabled")
+        threading.Thread(target=self.run_generate_appeals, daemon=True).start()
+
+    def _lookup_mapping_row(self, claim_user_group, contract_code):
+        matches = [
+            row for row in self.app_config.get("mapping_rows", [])
+            if str(row.get("Claim User Group", "")).strip() == str(claim_user_group).strip()
+            and str(row.get("Contract Code", "")).strip() == str(contract_code).strip()
+        ]
+        return matches[0] if matches else None
+
+    def _find_acronym(self, claim_user_group):
+        for row in self.app_config.get("acronym_rows", []):
+            if str(row.get("Claim User Group", "")).strip() == str(claim_user_group).strip():
+                return row.get("Acronym", "")
+        return ""
+
+    def _resolve_required_templates(self, ugid, contract_code, needs_form):
+        def find_template(template_type, target_filename):
+            default_dir = Path(self.get_template_folder_path(template_type))
+            candidate = default_dir / target_filename
+            if candidate.exists():
+                return str(candidate)
+            for path in self.get_template_mapping(template_type).values():
+                if Path(path).name.lower() == target_filename.lower() and Path(path).exists():
+                    return path
+            return ""
+
+        letter_path = find_template("letter", f"{ugid} - Letter template.docx")
+        if not letter_path or not os.path.exists(letter_path):
+            return None, None, "Letter template missing"
+        if needs_form:
+            form_path = find_template("form", f"{ugid} - Form - {contract_code}.docx")
+            if not form_path or not os.path.exists(form_path):
+                return None, None, "Form template missing"
+            return letter_path, form_path, None
+        fax_path = find_template("fax", f"{ugid} - Fax.docx")
+        if not fax_path or not os.path.exists(fax_path):
+            return None, None, "Fax template missing"
+        return letter_path, fax_path, None
+
+    def _parse_selected_method(self, mapping_row):
+        method_to_use = str(mapping_row.get("MethodToUse", "")).strip()
+        if method_to_use not in {"1", "2", "3"}:
+            return None, None, "Invalid MethodToUse value"
+        field_name = {
+            "1": "1st Method + Contact (1)",
+            "2": "2nd Method + Contact (2)",
+            "3": "3rd Method + Contact (3)",
+        }[method_to_use]
+        method_value = str(mapping_row.get(field_name, "")).strip()
+        if method_value.startswith("Fax - "):
+            return "Fax", method_value.replace("Fax - ", "", 1).strip(), None
+        if method_value.startswith("Mail - "):
+            return "Mail", method_value.replace("Mail - ", "", 1).strip(), None
+        return None, None, "Invalid method format"
+
+    def run_generate_appeals(self):
+        failures = []
+        successes = []
+        try:
+            all_rows = list(self.df.iterrows())
+            self.reset_progress(len(all_rows), "Generate Appeals")
+            for index, row in all_rows:
+                try:
+                    account = sanitize_path_component(row.get(self.account_col_name, ""))
+                    ugid = sanitize_path_component(row.get(self.claim_user_group_col, ""))
+                    contract_code = sanitize_path_component(row.get(self.contract_code_col, ""))
+                    contract_name = sanitize_path_component(row.get(self.contract_name_col, ""))
+                    if not ugid or not contract_code:
+                        failures.append((index, "Mapping not found"))
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    mapping_row = self._lookup_mapping_row(ugid, contract_code)
+                    if not mapping_row:
+                        failures.append((index, "Mapping not found"))
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    method_type, address_block, method_err = self._parse_selected_method(mapping_row)
+                    if method_err:
+                        failures.append((index, method_err))
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    form_flag = str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
+                    letter_template, second_template, template_err = self._resolve_required_templates(ugid, contract_code, form_flag)
+                    if template_err:
+                        failures.append((index, template_err))
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    route_folder = "Faxed Letters" if method_type == "Fax" else "Mailed Letters"
+                    now = datetime.now()
+                    path_parts = [
+                        sanitize_path_component(ugid),
+                        route_folder,
+                        sanitize_path_component(f"{contract_code} - {contract_name}"),
+                        sanitize_path_component(f"Year {now.strftime('%Y')}"),
+                        sanitize_path_component(f"Month {now.strftime('%m.%Y')}"),
+                        sanitize_path_component(f"Day {now.strftime('%m%d%y')}"),
+                        sanitize_path_component(account),
+                    ]
+                    target_dir = Path(self.output_path)
+                    for part in path_parts:
+                        target_dir = target_dir / sanitize_path_component(part)
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    row_data = self.format_row_data(row)
+                    blurb_body, blurb_subject = self.get_blurb_payload(self.combo_blurb.get() if hasattr(self, "combo_blurb") else "(None)")
+                    context = self.build_letter_merge_dict(row_data, blurb_body, blurb_subject)
+                    context["AddressBlock"] = address_block
+                    context["payer_name"] = mapping_row.get("Payer Name", "")
+                    context["payer_fax"] = address_block if method_type == "Fax" else ""
+                    context["payer_attn"] = ""
+                    acronym = self._find_acronym(ugid)
+                    filename_base = sanitize_path_component(f"{self.file_date_str}.{acronym}.{account}")
+                    letter_base = str(target_dir / f"{filename_base} - Letter")
+                    letter_path = self.create_and_save_doc(letter_template, letter_base, context)
+                    if not letter_path:
+                        failures.append((index, "Letter generation error"))
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    if form_flag:
+                        second_base = str(target_dir / f"{filename_base} - Form")
+                        output2 = self.create_and_save_doc(second_template, second_base, context)
+                    else:
+                        fax_context = dict(context)
+                        fax_context["total_pages"] = max(1, get_docx_page_count(letter_path))
+                        second_base = str(target_dir / f"{filename_base} - Fax")
+                        output2 = self.create_and_save_doc(second_template, second_base, fax_context)
+                    if not output2:
+                        failures.append((index, "Secondary document generation error"))
+                        if os.path.exists(letter_path):
+                            os.remove(letter_path)
+                        self.increment_progress("Generate Appeals")
+                        continue
+                    successes.append({
+                        "index": index,
+                        "letter_path": letter_path,
+                        "method_type": method_type,
+                        "payer_name": mapping_row.get("Payer Name", ""),
+                        "address_block": address_block,
+                        "ugid": ugid,
+                        "workflow_reason": row.get("Workflow_Reason", ""),
+                        "account": account,
+                    })
+                except Exception as row_exc:
+                    failures.append((index, f"Row error: {row_exc}"))
+                finally:
+                    self.increment_progress("Generate Appeals")
+            self.last_successful_items = successes
+            if failures:
+                self.export_failures(failures)
+            if successes:
+                self.extract_notes_from_successes(successes)
+            msg = f"Generation finished. Success: {len(successes)} | Failed: {len(failures)}"
+            self.finalize_progress(msg)
+            messagebox.showinfo("Generation Complete", msg)
+        finally:
+            self.set_buttons_state("normal")
+
+    def export_failures(self, failures):
+        """Write failed rows to a failure workbook with reason column."""
+        if not failures:
+            return
+        failed_indices = [idx for idx, _ in failures]
+        reason_map = {idx: reason for idx, reason in failures}
+        failure_df = self.df.loc[failed_indices].copy()
+        failure_df["Failure Reason"] = [reason_map.get(i, "") for i in failure_df.index]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = Path(self.output_path) / f"Failed_Rows_{timestamp}.xlsx"
+        failure_df.to_excel(out_path, index=False)
+        self.q_print(f"Failure file created: {out_path}")
+
+    def extract_notes_from_successes(self, successes):
+        """Automatically build notes files after generation for successful rows."""
+        grouped = {"Mail": [], "Fax": []}
+        start_text = self.app_config["extract_config"].get("start", DEFAULT_EXTRACT_START)
+        end_text = self.app_config["extract_config"].get("end", DEFAULT_EXTRACT_END)
+        pattern = rf"({re.escape(start_text)}.*?)(?={re.escape(end_text)})" if end_text else rf"({re.escape(start_text)}.*)"
+        for item in successes:
+            try:
+                doc = Document(item["letter_path"])
+                letter_text = "\n".join([para.text for para in doc.paragraphs])
+                match = re.search(pattern, letter_text, re.DOTALL | re.IGNORECASE)
+                extracted_text = normalize_extracted_note_text(match.group(1)) if match else ""
+                if item["method_type"] == "Mail":
+                    heading = f"Appeal letter mailed to {item['payer_name']}, address: {item['address_block']}. Noted as:"
+                    status = "Appeal letter mailed"
+                else:
+                    heading = f"Appeal letter faxed to {item['payer_name']}, fax number: {item['address_block']}. Noted as:"
+                    status = "Appeal letter faxed"
+                grouped[item["method_type"]].append([
+                    item["account"],
+                    f"{heading}\n{extracted_text}\nSaved as: {Path(item['letter_path']).stem}",
+                    item["ugid"],
+                    status,
+                    item["workflow_reason"],
+                    "",
+                ])
+            except Exception as exc:
+                self.q_print(f"Note extraction warning for {item.get('account')}: {exc}")
+        self.last_notes_file_paths = []
+        timestamp = datetime.now().strftime("%m%d%y%H%M%S")
+        for method, rows in grouped.items():
+            if not rows:
+                continue
+            notes_path = Path(self.output_path) / f"Notes_{method}_{timestamp}.xlsx"
+            df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
+            df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
+            self._add_notes_table(notes_path)
+            self.last_notes_file_paths.append(str(notes_path))
+        if self.last_notes_file_paths and hasattr(self, "btn_send_to_bot"):
+            self.btn_send_to_bot.config(state=tk.NORMAL)
+
+    def start_letter_merge_thread(self):
+        """Kick off the appeal letter merge in a background thread."""
         if not self.validate_common_inputs():
             return
         self.set_buttons_state("disabled")
