@@ -2699,7 +2699,7 @@ class MergeApp(tk.Tk):
             self.q_print("Sending notes files to bot...")
             threading.Thread(target=self.run_send_to_bot, daemon=True).start()
     def run_send_to_bot(self):
-        """Copies the generated notes file to the network path."""
+        """Copies all generated notes files to the configured network path."""
         try:
             valid_files = [p for p in self.last_notes_file_paths if os.path.exists(p)]
             if not valid_files:
