@@ -35,7 +35,7 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = Path(__file__).resolve().parent
 
-APP_DESKTOP_FOLDER_NAME = "Appeal Letter Generation"
+APP_DESKTOP_FOLDER_NAME = "Automated Appeal Letter Generation"
 APP_SUBDIRECTORIES = [
     "Forms",
     "Letter Templates",
@@ -199,6 +199,40 @@ def sanitize_path_component(value, fallback="Unknown"):
     return text if text else fallback
 
 
+def clean_text_value(value):
+    """Return a stripped string while tolerating blank dataframe cells."""
+
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def split_contact_lines(value):
+    """Normalize a fax/address cell while preserving intentional line breaks."""
+
+    text = clean_text_value(value).replace("\r\n", "\n").replace("\r", "\n")
+    return [line.strip() for line in text.split("\n") if line.strip()]
+
+
+def build_contact_address_block(payer_name, attention_to, method_type, contact):
+    """Build the formatted payer contact block used by AddressBlock."""
+
+    lines = []
+    payer_name = clean_text_value(payer_name)
+    attention_to = clean_text_value(attention_to)
+    if payer_name:
+        lines.append(payer_name)
+    if attention_to:
+        lines.append(f"Attention To: {attention_to}")
+    if clean_text_value(method_type).lower() == "fax":
+        fax_number = clean_text_value(contact)
+        if fax_number:
+            lines.append(f"Fax: {fax_number}")
+    else:
+        lines.extend(split_contact_lines(contact))
+    return "\n".join(lines)
+
+
 class FormattedValue:
     """Wrap a raw value while deferring formatting until string coercion."""
 
@@ -286,7 +320,7 @@ class MergeApp(tk.Tk):
     def __init__(self):
         """Set up the window, configuration defaults, and initial UI state."""
         super().__init__()
-        self.title("PARS - Letter Generation v3.0")
+        self.title("PARS - Automated Letter Generation Tool v1.0")
         self.configure_window_geometry()
         # --- Data Storage ---
         self.df = None
@@ -296,6 +330,8 @@ class MergeApp(tk.Tk):
             "output_path": "",
             "column_formats": {},
             "blurbs": {},
+            "auto_detect_blurb": True,
+            "selected_blurb": "(None)",
             "fax_info": DEFAULT_FAX_INFO.copy(),
             "special_cols": {
                 "account_col": "",
@@ -330,6 +366,9 @@ class MergeApp(tk.Tk):
         self.enforce_fax_info_defaults()
         self.normalize_blurb_config()
         self.normalize_template_config()
+        self.auto_detect_blurb_var = tk.BooleanVar(
+            value=bool(self.app_config.get("auto_detect_blurb", True))
+        )
         self.create_widgets()
         self.configure_weighted_grid()
         self.update_status_bar()
@@ -423,22 +462,76 @@ class MergeApp(tk.Tk):
             self.btn_toggle_howto.configure(text="Hide steps")
 
 
-    def create_widgets(self):
-        """Construct the notebook and register each application tab."""
-        main_frame = ttk.Frame(self, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+    def configure_app_styles(self):
+        """Apply a distinct, organized visual theme for this tool."""
         style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        base_bg = "#f3f6f8"
+        panel_bg = "#ffffff"
+        header_bg = "#16324f"
+        accent = "#0f766e"
+        accent_active = "#115e59"
+        border = "#c9d5dd"
+
+        self.configure(background=base_bg)
+        style.configure(".", font=("Segoe UI", 10))
+        style.configure("App.TFrame", background=base_bg)
+        style.configure("Header.TFrame", background=header_bg)
+        style.configure("Workspace.TFrame", background=base_bg)
+        style.configure("Panel.TLabelframe", background=panel_bg, bordercolor=border, relief=tk.SOLID)
+        style.configure(
+            "Panel.TLabelframe.Label",
+            background=panel_bg,
+            foreground="#243746",
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.configure("Hero.TLabel", background=header_bg, foreground="#ffffff", font=("Segoe UI", 17, "bold"))
+        style.configure("HeroSub.TLabel", background=header_bg, foreground="#d8e6ef", font=("Segoe UI", 10))
+        style.configure("Muted.TLabel", background=base_bg, foreground="#516271")
+        style.configure("PanelMuted.TLabel", background=panel_bg, foreground="#516271")
+        style.configure("TNotebook", background=base_bg, borderwidth=0)
         style.configure(
             "TNotebook.Tab",
-            padding=(14, 8),
-            font=("TkDefaultFont", 10, "bold"),
+            padding=(16, 9),
+            font=("Segoe UI", 10, "bold"),
+            background="#e5edf3",
+            foreground="#243746",
         )
         style.map(
             "TNotebook.Tab",
-            background=[("selected", "#d9ecff"), ("active", "#eef5ff")],
+            background=[("selected", "#ffffff"), ("active", "#d6e3eb")],
+            foreground=[("selected", "#0b2239"), ("active", "#0b2239")],
         )
+        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 9))
+        style.map(
+            "Primary.TButton",
+            background=[("active", accent_active), ("!disabled", accent)],
+            foreground=[("!disabled", "#ffffff")],
+        )
+        style.configure("Secondary.TButton", padding=(10, 7))
+        style.configure("Status.TLabel", background="#e5edf3", foreground="#243746", padding=(8, 4))
+
+    def create_widgets(self):
+        """Construct the notebook and register each application tab."""
+        self.configure_app_styles()
+        main_frame = ttk.Frame(self, padding=10, style="App.TFrame")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(main_frame, padding=(16, 12), style="Header.TFrame")
+        header.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(header, text="Automated Appeal Letter Generation", style="Hero.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            header,
+            text="Prepare files, manage templates, extract notes, and generate appeal files.",
+            style="HeroSub.TLabel",
+        ).pack(anchor=tk.W, pady=(2, 0))
+
         self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
         # --- Create Tabs ---
         self.tab_main = self.create_main_tab()
         self.tab_extract_config = self.create_extraction_config_tab() # Now includes CM Headings
@@ -457,64 +550,96 @@ class MergeApp(tk.Tk):
         # --- End Logical Tab Order ---
         self.update_main_combos()
         self.status_bar = ttk.Label(
-            main_frame, text="Ready. Load an Excel file.", relief=tk.SUNKEN, anchor=tk.W
+            main_frame,
+            text="Ready. Load an Excel file.",
+            anchor=tk.W,
+            style="Status.TLabel",
         )
-        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
     # --- Tab Creation ---
     def create_main_tab(self):
         """Build the primary tab that handles file selection and merges."""
-        frame = ttk.Frame(self.notebook, padding=10)
+        frame = ttk.Frame(self.notebook, padding=12, style="Workspace.TFrame")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=0)
+        frame.rowconfigure(1, weight=1)
+
+        intro = ttk.Frame(frame, padding=(0, 0, 0, 10), style="Workspace.TFrame")
+        intro.grid(row=0, column=0, sticky=tk.EW)
+        intro.columnconfigure(0, weight=1)
+        ttk.Label(
+            intro,
+            text="Run Workspace",
+            style="Muted.TLabel",
+            font=("Segoe UI", 11, "bold"),
+        ).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(
+            intro,
+            text="Select the source workbook, choose where packets should land, then launch the run from the command panel.",
+            style="Muted.TLabel",
+            wraplength=880,
+            justify=tk.LEFT,
+        ).grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
+
+        workspace = ttk.Frame(frame, style="Workspace.TFrame")
+        workspace.grid(row=1, column=0, sticky=tk.NSEW)
+        workspace.columnconfigure(0, weight=3, minsize=520)
+        workspace.columnconfigure(1, weight=2, minsize=300)
+        workspace.rowconfigure(0, weight=1)
+
+        setup_column = ttk.Frame(workspace, style="Workspace.TFrame")
+        setup_column.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
+        setup_column.columnconfigure(0, weight=1)
+
+        command_column = ttk.Frame(workspace, style="Workspace.TFrame")
+        command_column.grid(row=0, column=1, sticky=tk.NSEW)
+        command_column.columnconfigure(0, weight=1)
+        command_column.rowconfigure(2, weight=1)
+
         # --- File Paths ---
-        file_frame = ttk.LabelFrame(frame, text="File Paths")
-        file_frame.grid(row=0, column=0, sticky=tk.EW, pady=5)
+        file_frame = ttk.LabelFrame(setup_column, text="1. Source and Destination", style="Panel.TLabelframe")
+        file_frame.grid(row=0, column=0, sticky=tk.EW, pady=(0, 10))
+        file_frame.columnconfigure(0, weight=0)
+        file_frame.columnconfigure(1, weight=1)
+        file_frame.columnconfigure(2, weight=0)
         self.register_grid_weights(file_frame, {1: 1})
-        # --- DETAIL REPORT CLEANER ---
-        ttk.Label(file_frame, text="Detail Report (PROFESSIONAL):").grid(
-            row=0, column=0, padx=5, pady=5, sticky=tk.E
-        )
-        self.entry_detail_report = ttk.Entry(file_frame, width=80)
-        self.entry_detail_report.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
-        btn_frame = ttk.Frame(file_frame)
-        btn_frame.grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
-        btn_browse_detail = ttk.Button(
-            btn_frame,
-            text="Browse...",
-            command=self.select_detail_report
-        )
-        btn_browse_detail.pack(side=tk.LEFT)
         self.entry_excel = self.create_file_entry(
             file_frame,
             "Excel File:",
             "",
             self.load_excel,
-            1,
+            0,
         )
         self.entry_output = self.create_file_entry(
             file_frame,
             "Output Folder:",
             "",
             self.select_output,
-            2,
+            1,
         )
-        self.btn_clean_report = ttk.Button(
-            btn_frame,
-            text="Clean Report",
-            command=self.start_clean_report_thread
-        )
-        self.btn_clean_report.pack(side=tk.LEFT, padx=(5,0))
-        # --- END DETAIL REPORT CLEANER ---
+
         # --- Selections ---
-        select_frame = ttk.LabelFrame(frame, text="Run Settings")
-        select_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=10)
-        self.register_grid_weights(select_frame, {1: 1, 3: 1})
+        select_frame = ttk.LabelFrame(setup_column, text="2. Letter Settings", style="Panel.TLabelframe")
+        select_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        select_frame.columnconfigure(0, weight=0)
+        select_frame.columnconfigure(1, weight=1)
+        select_frame.columnconfigure(2, weight=0)
+        select_frame.columnconfigure(3, weight=1)
 
         ttk.Label(select_frame, text="Blurb (Letters and Forms):").grid(
             row=0, column=0, padx=5, pady=5, sticky=tk.E
         )
         self.combo_blurb = ttk.Combobox(select_frame, state="readonly", width=40)
         self.combo_blurb.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.combo_blurb.bind("<<ComboboxSelected>>", self.save_config)
+        self.chk_auto_detect_blurb = ttk.Checkbutton(
+            select_frame,
+            text="Auto-detect blurb from BlurbName Column",
+            variable=self.auto_detect_blurb_var,
+            command=self.toggle_blurb_selection_mode,
+        )
+        self.chk_auto_detect_blurb.grid(
+            row=1, column=0, columnspan=2, padx=5, pady=(0, 5), sticky=tk.W
+        )
 
         ttk.Label(select_frame, text="Letter Date (Long Format):").grid(
             row=0, column=2, padx=5, pady=5, sticky=tk.E
@@ -530,38 +655,46 @@ class MergeApp(tk.Tk):
         self.entry_file_date.grid(row=1, column=3, padx=5, pady=5, sticky=tk.EW)
         self.entry_file_date.insert(0, datetime.now().strftime("%m%d%y"))
 
-        sample_btn_frame = ttk.Frame(select_frame)
-        sample_btn_frame.grid(row=2, column=0, columnspan=4, sticky=tk.EW, pady=(5, 0))
+        sample_btn_frame = ttk.LabelFrame(setup_column, text="3. Preview Outputs", style="Panel.TLabelframe")
+        sample_btn_frame.grid(row=2, column=0, sticky=tk.EW)
         sample_btn_frame.columnconfigure(0, weight=1)
         sample_btn_frame.columnconfigure(1, weight=1)
         self.btn_sample_letter = ttk.Button(
             sample_btn_frame,
             text="Generate Sample Letter",
             command=self.generate_sample_letter,
+            style="Secondary.TButton",
         )
-        self.btn_sample_letter.grid(row=0, column=0, sticky=tk.EW, padx=3, pady=2)
+        self.btn_sample_letter.grid(row=0, column=0, sticky=tk.EW, padx=5, pady=8)
         self.btn_sample_form = ttk.Button(
             sample_btn_frame,
             text="Generate Sample Form",
             command=self.generate_sample_form,
+            style="Secondary.TButton",
         )
-        self.btn_sample_form.grid(row=0, column=1, sticky=tk.EW, padx=3, pady=2)
+        self.btn_sample_form.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=8)
 
-        select_frame.grid_columnconfigure(0, weight=0)
-        select_frame.grid_columnconfigure(1, weight=1)
-        select_frame.grid_columnconfigure(2, weight=0)
-        select_frame.grid_columnconfigure(3, weight=1)
-        # --- Run Buttons ---
-        run_frame = ttk.Frame(frame)
-        run_frame.grid(row=2, column=0, sticky=tk.EW, pady=10)
-        for col in range(1):
-            run_frame.columnconfigure(col, weight=1)
+        # --- Actions ---
+        run_frame = ttk.LabelFrame(command_column, text="Command Panel", style="Panel.TLabelframe")
+        run_frame.grid(row=0, column=0, sticky=tk.EW, pady=(0, 10))
+        run_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            run_frame,
+            text="Generate full appeal packets after the setup steps are ready.",
+            style="PanelMuted.TLabel",
+            wraplength=280,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, sticky=tk.W, padx=8, pady=(8, 4))
         self.btn_generate_appeals = ttk.Button(
-            run_frame, text="Generate Appeals", command=self.start_generate_appeals_thread
+            run_frame,
+            text="Generate Appeals",
+            command=self.start_generate_appeals_thread,
+            style="Primary.TButton",
         )
-        self.btn_generate_appeals.grid(row=0, column=0, sticky=tk.NSEW, padx=2, pady=2)
-        progress_frame = ttk.LabelFrame(frame, text="Progress")
-        progress_frame.grid(row=3, column=0, sticky=tk.EW, pady=5)
+        self.btn_generate_appeals.grid(row=1, column=0, sticky=tk.EW, padx=8, pady=(4, 10))
+
+        progress_frame = ttk.LabelFrame(command_column, text="Run Progress", style="Panel.TLabelframe")
+        progress_frame.grid(row=1, column=0, sticky=tk.EW)
         progress_frame.columnconfigure(0, weight=1)
         self.progress_bar = ttk.Progressbar(
             progress_frame,
@@ -569,11 +702,14 @@ class MergeApp(tk.Tk):
             maximum=100,
             mode="determinate",
         )
-        self.progress_bar.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
+        self.progress_bar.grid(row=0, column=0, padx=8, pady=(10, 5), sticky=tk.EW)
         self.progress_label = ttk.Label(
-            progress_frame, textvariable=self.progress_label_var, anchor=tk.W
+            progress_frame,
+            textvariable=self.progress_label_var,
+            anchor=tk.W,
+            style="PanelMuted.TLabel",
         )
-        self.progress_label.grid(row=1, column=0, padx=5, pady=(0, 5), sticky=tk.EW)
+        self.progress_label.grid(row=1, column=0, padx=8, pady=(0, 10), sticky=tk.EW)
         return frame
     def create_column_config_tab(self):
         """Set up the tab for configuring column formats and required fields."""
@@ -603,14 +739,16 @@ class MergeApp(tk.Tk):
         format_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         canvas = tk.Canvas(format_frame)
         scrollbar = ttk.Scrollbar(format_frame, orient="vertical", command=canvas.yview)
+        self.col_config_canvas = canvas
         self.col_config_scrollable_frame = ttk.Frame(canvas)
         self.col_config_scrollable_frame.bind(
             "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
-        canvas.create_window(
+        self.col_config_window_id = canvas.create_window(
             (0, 0), window=self.col_config_scrollable_frame, anchor="nw"
         )
         canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind("<Configure>", self._on_column_format_canvas_configure)
         canvas.bind("<MouseWheel>", lambda event: self._on_mousewheel(event, canvas))
         canvas.bind("<Button-4>", lambda event: self._on_mousewheel(event, canvas))
         canvas.bind("<Button-5>", lambda event: self._on_mousewheel(event, canvas))
@@ -647,9 +785,13 @@ class MergeApp(tk.Tk):
             "Claim User Group",
             "Contract Code",
             "Payer Name",
-            "1st Method + Contact (1)",
-            "2nd Method + Contact (2)",
-            "3rd Method + Contact (3)",
+            "Attention To",
+            "Method 1 Type",
+            "Method 1 Contact",
+            "Method 2 Type",
+            "Method 2 Contact",
+            "Method 3 Type",
+            "Method 3 Contact",
             "MethodToUse",
             "Form?",
         ]
@@ -669,16 +811,18 @@ class MergeApp(tk.Tk):
         ttk.Button(btns, text="Add", command=lambda: self.edit_mapping_row()).grid(row=0, column=1, sticky=tk.EW, padx=2)
         ttk.Button(btns, text="Edit", command=lambda: self.edit_mapping_row(edit=True)).grid(row=0, column=2, sticky=tk.EW, padx=2)
         ttk.Button(btns, text="Remove", command=self.remove_mapping_row).grid(row=0, column=3, sticky=tk.EW, padx=2)
+        self.mapping_tree.bind("<Double-1>", lambda event: self.edit_mapping_row(edit=True))
 
         acr_frame = ttk.LabelFrame(frame, text="Claim User Group Acronyms")
         acr_frame.grid(row=1, column=0, sticky=tk.NSEW)
         acr_frame.columnconfigure(0, weight=1)
         acr_frame.rowconfigure(0, weight=1)
-        self.acronym_columns = ["Claim User Group", "Acronym"]
+        self.acronym_columns = ["Claim User Group", "Acronym", "Mailing Folder"]
         self.acronym_tree = ttk.Treeview(acr_frame, columns=self.acronym_columns, show="headings")
         for col in self.acronym_columns:
             self.acronym_tree.heading(col, text=col)
-            self.acronym_tree.column(col, width=220, anchor=tk.W)
+            width = 360 if col == "Mailing Folder" else 220
+            self.acronym_tree.column(col, width=width, anchor=tk.W)
         self.acronym_tree.grid(row=0, column=0, sticky=tk.NSEW)
         acr_btns = ttk.Frame(acr_frame)
         acr_btns.grid(row=1, column=0, sticky=tk.EW, pady=(6, 0))
@@ -687,6 +831,29 @@ class MergeApp(tk.Tk):
         ttk.Button(acr_btns, text="Add", command=lambda: self.edit_acronym_row()).grid(row=0, column=0, sticky=tk.EW, padx=2)
         ttk.Button(acr_btns, text="Edit", command=lambda: self.edit_acronym_row(edit=True)).grid(row=0, column=1, sticky=tk.EW, padx=2)
         ttk.Button(acr_btns, text="Remove", command=self.remove_acronym_row).grid(row=0, column=2, sticky=tk.EW, padx=2)
+        self.acronym_tree.bind("<Double-1>", lambda event: self.edit_acronym_row(edit=True))
+        # Migrate any existing mapping rows that used the old combined "Method + Contact" columns
+        rows = self.app_config.get("mapping_rows", [])
+        if rows:
+            migrated = False
+            for r in rows:
+                for i, old_col in enumerate(["1st Method + Contact (1)", "2nd Method + Contact (2)", "3rd Method + Contact (3)"], start=1):
+                    if old_col in r and r.get(old_col):
+                        val = str(r.get(old_col, "")).strip()
+                        if " - " in val:
+                            t, c = val.split(" - ", 1)
+                        else:
+                            # No explicit prefix; try to infer (default to contact only)
+                            t, c = "", val
+                        r[f"Method {i} Type"] = t.strip()
+                        r[f"Method {i} Contact"] = c.strip()
+                        # remove old combined field
+                        if old_col in r:
+                            del r[old_col]
+                        migrated = True
+            if migrated:
+                self.app_config["mapping_rows"] = rows
+                self.save_config()
         self.refresh_mapping_views()
         return frame
     # --- CLD SPLITTER ---
@@ -805,8 +972,8 @@ class MergeApp(tk.Tk):
         )
         self.populate_listbox(listbox, data_dict)
         return frame
-    def create_template_manager_tab(self):
-        """Provide an editor tab for managing template mappings."""
+    def _legacy_create_template_manager_tab(self):
+        """Legacy template tab kept for reference during the UI transition."""
         frame = ttk.Frame(self.notebook, padding=10)
         paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True)
@@ -914,6 +1081,186 @@ class MergeApp(tk.Tk):
         )
         btn_del.pack(side=tk.RIGHT, padx=2)
         self.template_editor_fields = (entry_name, entry_path, type_combo)
+        paned_window.add(editor_frame, weight=2)
+        return frame
+
+    def create_template_manager_tab(self):
+        """Provide an editor tab for managing template mappings."""
+        frame = ttk.Frame(self.notebook, padding=10, style="Workspace.TFrame")
+        paned_window = ttk.PanedWindow(frame, orient=tk.HORIZONTAL)
+        paned_window.pack(fill=tk.BOTH, expand=True)
+
+        list_frame = ttk.Frame(paned_window, padding=5, style="Workspace.TFrame")
+        ttk.Label(list_frame, text="Template Library", style="Muted.TLabel").pack(anchor=tk.W)
+        list_notebook = ttk.Notebook(list_frame)
+        list_notebook.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        self.template_listboxes = {}
+
+        for template_type, label in (
+            ("letter", "Letter Templates"),
+            ("fax", "Fax Templates"),
+            ("form", "Form Templates"),
+        ):
+            tab_frame = ttk.Frame(list_notebook, padding=5)
+            listbox_frame = ttk.Frame(tab_frame)
+            listbox_frame.pack(fill=tk.BOTH, expand=True)
+            listbox_scroll = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL)
+            listbox = tk.Listbox(
+                listbox_frame, yscrollcommand=listbox_scroll.set, exportselection=False
+            )
+            listbox_scroll.config(command=listbox.yview)
+            listbox_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            listbox.bind(
+                "<<ListboxSelect>>",
+                lambda event, t=template_type: self.load_template_item(event, t),
+            )
+            self.template_listboxes[template_type] = listbox
+            list_notebook.add(tab_frame, text=label)
+            self.populate_listbox(listbox, self.get_template_mapping(template_type))
+
+        paned_window.add(list_frame, weight=1)
+
+        editor_frame = ttk.LabelFrame(
+            paned_window,
+            text="Template Setup",
+            padding=10,
+            style="Panel.TLabelframe",
+        )
+        editor_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            editor_frame,
+            text="Build the required filename from simple fields, then choose the Word template file.",
+            justify=tk.LEFT,
+            wraplength=360,
+            style="PanelMuted.TLabel",
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(editor_frame, text="Template Type:").grid(
+            row=1, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        type_combo = ttk.Combobox(
+            editor_frame,
+            state="readonly",
+            values=["Letter", "Fax", "Form"],
+        )
+        type_combo.grid(row=1, column=1, columnspan=2, sticky=tk.EW, pady=5)
+        type_combo.set("Letter")
+
+        ttk.Label(editor_frame, text="Claim User Group:").grid(
+            row=2, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        claim_group_combo = ttk.Combobox(
+            editor_frame,
+            values=self.get_template_claim_group_options(),
+        )
+        claim_group_combo.grid(row=2, column=1, columnspan=2, sticky=tk.EW, pady=5)
+
+        ttk.Label(editor_frame, text="Contract Code:").grid(
+            row=3, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        contract_code_entry = ttk.Entry(editor_frame)
+        contract_code_entry.grid(row=3, column=1, columnspan=2, sticky=tk.EW, pady=5)
+
+        generated_name_var = tk.StringVar()
+        ttk.Label(editor_frame, text="Generated Filename:").grid(
+            row=4, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        generated_name_entry = ttk.Entry(
+            editor_frame,
+            textvariable=generated_name_var,
+            state="readonly",
+        )
+        generated_name_entry.grid(row=4, column=1, columnspan=2, sticky=tk.EW, pady=5)
+
+        ttk.Label(editor_frame, text="Template Path:").grid(
+            row=5, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        path_frame = ttk.Frame(editor_frame)
+        path_frame.grid(row=5, column=1, columnspan=2, sticky=tk.EW, pady=5)
+        path_frame.columnconfigure(0, weight=1)
+        entry_path = ttk.Entry(path_frame, width=30)
+        entry_path.grid(row=0, column=0, sticky=tk.EW)
+        ttk.Button(
+            path_frame,
+            text="Browse...",
+            command=lambda: self.browse_for_template(
+                type_combo.get().lower(), entry_path
+            ),
+        ).grid(row=0, column=1, padx=(5, 0))
+
+        ttk.Label(
+            editor_frame,
+            text="On save, the file is renamed and moved into the correct template folder.",
+            wraplength=300,
+            justify=tk.LEFT,
+            style="PanelMuted.TLabel",
+        ).grid(row=6, column=1, columnspan=2, sticky=tk.W, pady=(3, 10))
+
+        def refresh_generated_name(*_):
+            template_type = type_combo.get().lower()
+            needs_contract = template_type == "form"
+            contract_code_entry.configure(state=tk.NORMAL if needs_contract else tk.DISABLED)
+            generated_name_var.set(
+                self.build_template_filename(
+                    template_type,
+                    claim_group_combo.get(),
+                    contract_code_entry.get(),
+                )
+            )
+
+        type_combo.bind("<<ComboboxSelected>>", refresh_generated_name)
+        claim_group_combo.bind("<<ComboboxSelected>>", refresh_generated_name)
+        claim_group_combo.bind("<KeyRelease>", refresh_generated_name)
+        contract_code_entry.bind("<KeyRelease>", refresh_generated_name)
+        refresh_generated_name()
+
+        button_frame = ttk.Frame(editor_frame)
+        button_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=10)
+        button_frame.columnconfigure(1, weight=1)
+        ttk.Button(
+            button_frame,
+            text="New",
+            command=lambda: self.clear_template_editor(
+                claim_group_combo,
+                contract_code_entry,
+                generated_name_var,
+                entry_path,
+                type_combo,
+            ),
+        ).grid(row=0, column=0, padx=2, sticky=tk.W)
+        ttk.Button(
+            button_frame,
+            text="Save",
+            command=lambda: self.save_template_item(
+                type_combo.get().lower(),
+                claim_group_combo,
+                contract_code_entry,
+                generated_name_var,
+                entry_path,
+            ),
+            style="Primary.TButton",
+        ).grid(row=0, column=1, padx=2, sticky=tk.EW)
+        ttk.Button(
+            button_frame,
+            text="Delete",
+            command=lambda: self.delete_template_item(
+                type_combo.get().lower(),
+                claim_group_combo,
+                contract_code_entry,
+                generated_name_var,
+                entry_path,
+                type_combo,
+            ),
+        ).grid(row=0, column=2, padx=2, sticky=tk.E)
+        self.template_editor_fields = (
+            claim_group_combo,
+            contract_code_entry,
+            generated_name_var,
+            entry_path,
+            type_combo,
+            refresh_generated_name,
+        )
         paned_window.add(editor_frame, weight=2)
         return frame
     # --- REFACTORED: New tab combining Blurbs and Placeholders ---
@@ -1109,11 +1456,22 @@ class MergeApp(tk.Tk):
         blurb_keys = ["(None)"] + sorted(list(self.app_config["blurbs"].keys()))
         if hasattr(self, 'combo_blurb'):
             self.combo_blurb["values"] = blurb_keys
-            self.combo_blurb.set("(None)")
+            saved_blurb = self.app_config.get("selected_blurb", "(None)")
+            self.combo_blurb.set(saved_blurb if saved_blurb in blurb_keys else "(None)")
+            self.toggle_blurb_selection_mode(save=False)
         if hasattr(self, 'combo_cm_heading'):
             heading_keys = ["(None)"] + sorted(list(self.app_config["cm_headings"].keys()))
             self.combo_cm_heading["values"] = heading_keys
             self.combo_cm_heading.set("(None)")
+
+    def toggle_blurb_selection_mode(self, save=True):
+        """Enable manual blurb selection only when auto-detect is off."""
+
+        if hasattr(self, "combo_blurb"):
+            state = tk.DISABLED if self.auto_detect_blurb_var.get() else "readonly"
+            self.combo_blurb.configure(state=state)
+        if save:
+            self.save_config()
 
     def get_blurb_payload(self, blurb_key):
         """Return the blurb body and subject for the selected key."""
@@ -1126,17 +1484,24 @@ class MergeApp(tk.Tk):
             )
         return str(blurb_data), DEFAULT_BLURB_SUBJECT
 
-    # --- DETAIL REPORT CLEANER ---
-    def select_detail_report(self):
-        """Opens file dialog to select the raw detail report."""
-        filepath = filedialog.askopenfilename(
-            title="Detail Report",
-            filetypes=[("Excel Files", "*.xlsx *.xls")]
-        )
-        if filepath:
-            self.entry_detail_report.delete(0, tk.END)
-            self.entry_detail_report.insert(0, filepath)
-    # --- END DETAIL REPORT CLEANER ---
+    def get_row_blurb_payload(self, row):
+        """Resolve the blurb body/subject for a specific dataframe row."""
+
+        if self.auto_detect_blurb_var.get():
+            if "BlurbName" not in self.df.columns:
+                return None, None, "Missing BlurbName column"
+            blurb_key = clean_text_value(row.get("BlurbName", ""))
+            if not blurb_key:
+                return None, None, "Missing BlurbName value"
+            if blurb_key not in self.app_config["blurbs"]:
+                return None, None, f"BlurbName '{blurb_key}' does not match an existing blurb"
+            blurb_body, blurb_subject = self.get_blurb_payload(blurb_key)
+            return blurb_body, blurb_subject, None
+
+        blurb_key = self.combo_blurb.get() if hasattr(self, "combo_blurb") else "(None)"
+        blurb_body, blurb_subject = self.get_blurb_payload(blurb_key)
+        return blurb_body, blurb_subject, None
+
     def save_extract_config(self):
         """Persist the CM note extraction start/end markers to disk."""
         start_text = self.entry_extract_start.get()
@@ -1312,8 +1677,8 @@ class MergeApp(tk.Tk):
             entry_path_widget.delete(0, tk.END)
             entry_path_widget.insert(0, filepath)
 
-    def load_template_item(self, event, template_type):
-        """Load a template mapping into the editor widgets."""
+    def _legacy_load_template_item(self, event, template_type):
+        """Legacy template loader kept for reference during the UI transition."""
         try:
             selected_index = event.widget.curselection()[0]
             selected_name = event.widget.get(selected_index)
@@ -1329,8 +1694,8 @@ class MergeApp(tk.Tk):
         entry_path.insert(0, template_map.get(selected_name, ""))
         type_combo.set(template_type.capitalize())
 
-    def save_template_item(self, template_type, entry_name, entry_path):
-        """Persist a template mapping and refresh related combo boxes."""
+    def _legacy_save_template_item(self, template_type, entry_name, entry_path):
+        """Legacy template saver kept for reference during the UI transition."""
         item_name = entry_name.get().strip()
         item_path = entry_path.get().strip()
         if not item_name or not item_path:
@@ -1356,8 +1721,8 @@ class MergeApp(tk.Tk):
             f"{template_type.capitalize()} template '{item_name}' saved."
         )
 
-    def delete_template_item(self, template_type, entry_name, entry_path):
-        """Delete the selected template mapping entry."""
+    def _legacy_delete_template_item(self, template_type, entry_name, entry_path):
+        """Legacy template delete handler kept for reference during the UI transition."""
         listbox = self.template_listboxes.get(template_type)
         if not listbox:
             return
@@ -1380,97 +1745,428 @@ class MergeApp(tk.Tk):
                     f"{template_type.capitalize()} template '{selected_name}' deleted."
                 )
 
-    def clear_template_editor(self, entry_name, entry_path):
-        """Reset the template editor fields to empty values."""
+    def _legacy_clear_template_editor(self, entry_name, entry_path):
+        """Legacy template editor reset kept for reference during the UI transition."""
         entry_name.delete(0, tk.END)
         entry_path.delete(0, tk.END)
-    def refresh_mapping_views(self):
-        """Refresh mapping and acronym trees from config state."""
-        if hasattr(self, "mapping_tree"):
-            for item in self.mapping_tree.get_children():
-                self.mapping_tree.delete(item)
-            for row in self.app_config.get("mapping_rows", []):
-                values = [row.get(col, "") for col in self.mapping_columns]
-                self.mapping_tree.insert("", tk.END, values=values)
-        if hasattr(self, "acronym_tree"):
-            for item in self.acronym_tree.get_children():
-                self.acronym_tree.delete(item)
-            for row in self.app_config.get("acronym_rows", []):
-                values = [row.get(col, "") for col in self.acronym_columns]
-                self.acronym_tree.insert("", tk.END, values=values)
 
-    def _prompt_for_values(self, title, columns, initial=None):
-        values = {}
-        for col in columns:
-            default = "" if not initial else str(initial.get(col, ""))
-            result = simpledialog.askstring(title, f"{col}:", initialvalue=default, parent=self)
-            if result is None:
-                return None
-            values[col] = result.strip()
-        return values
+    def get_template_claim_group_options(self):
+        """Return known claim user groups for template naming."""
+        options = set()
+        for row in self.app_config.get("mapping_rows", []):
+            claim_group = str(row.get("Claim User Group", "")).strip()
+            if claim_group:
+                options.add(claim_group)
+        for row in self.app_config.get("acronym_rows", []):
+            claim_group = str(row.get("Claim User Group", "")).strip()
+            if claim_group:
+                options.add(claim_group)
+        return sorted(options)
 
-    def import_mapping_rows(self):
-        filepath = filedialog.askopenfilename(
-            title="Import Mapping Table",
-            filetypes=[("Excel Files", "*.xlsx *.xls"), ("CSV Files", "*.csv")],
-        )
-        if not filepath:
-            return
+    def build_template_filename(self, template_type, claim_group, contract_code=""):
+        """Build the exact filename expected by the template resolver."""
+        claim_group = str(claim_group or "").strip()
+        contract_code = str(contract_code or "").strip()
+        if not claim_group:
+            return ""
+        if template_type == "letter":
+            return f"{claim_group} - Letter template.docx"
+        if template_type == "fax":
+            return f"{claim_group} - Fax.docx"
+        if template_type == "form":
+            if not contract_code:
+                return ""
+            return f"{claim_group} - Form - {contract_code}.docx"
+        return ""
+
+    def parse_template_filename(self, template_type, filename):
+        """Split a managed template filename back into editor fields."""
+        name = Path(str(filename or "")).name
+        if name.lower().endswith(".docx"):
+            name = name[:-5]
+        if template_type == "letter" and name.endswith(" - Letter template"):
+            return name[:-18], ""
+        if template_type == "fax" and name.endswith(" - Fax"):
+            return name[:-6], ""
+        if template_type == "form" and " - Form - " in name:
+            claim_group, contract_code = name.split(" - Form - ", 1)
+            return claim_group, contract_code
+        return name, ""
+
+    def validate_template_filename_parts(self, template_type, claim_group, contract_code):
+        """Validate template filename fields before moving files."""
+        claim_group = str(claim_group or "").strip()
+        contract_code = str(contract_code or "").strip()
+        if not claim_group:
+            messagebox.showerror("Template Name Needed", "Claim User Group is required.")
+            return False
+        if template_type == "form" and not contract_code:
+            messagebox.showerror("Template Name Needed", "Contract Code is required for form templates.")
+            return False
+        invalid_values = [claim_group]
+        if template_type == "form":
+            invalid_values.append(contract_code)
+        for value in invalid_values:
+            if INVALID_PATH_CHARS.search(value):
+                messagebox.showerror(
+                    "Invalid Filename",
+                    "Template name fields cannot contain: \\ / : * ? \" < > |",
+                )
+                return False
+        return True
+
+    def move_template_to_expected_filename(self, template_type, template_path, target_filename):
+        """Move and rename a template into the folder expected by generation."""
+        if not template_path or not os.path.exists(template_path):
+            messagebox.showerror(
+                "Template File Needed",
+                "Choose an existing .docx template file before saving.",
+            )
+            return None
+
+        default_dir = Path(self.get_template_folder_path(template_type))
+        target_path = default_dir / target_filename
+        source_path = Path(template_path)
         try:
-            if filepath.lower().endswith(".csv"):
-                df_map = pd.read_csv(filepath)
-            else:
-                df_map = pd.read_excel(filepath)
-            rows = []
-            for _, row in df_map.iterrows():
-                entry = {col: "" if pd.isna(row.get(col, "")) else str(row.get(col, "")).strip() for col in self.mapping_columns}
-                rows.append(entry)
-            self.app_config["mapping_rows"] = rows
-            self.refresh_mapping_views()
-            self.save_config()
+            default_dir.mkdir(parents=True, exist_ok=True)
+            if source_path.resolve() == target_path.resolve():
+                return str(target_path)
+            if target_path.exists():
+                should_replace = messagebox.askyesno(
+                    "Replace Existing Template",
+                    f"A template already exists with this name:\n{target_path}\n\nReplace it?",
+                )
+                if not should_replace:
+                    return None
+                target_path.unlink()
+            shutil.move(str(source_path), str(target_path))
+            return str(target_path)
         except Exception as exc:
-            messagebox.showerror("Import Failed", f"Unable to import mapping data:\n{exc}")
+            messagebox.showwarning(
+                "Template Save Failed",
+                f"Unable to move and rename template:\n{exc}",
+            )
+            return None
 
-    def edit_mapping_row(self, edit=False):
-        rows = self.app_config.get("mapping_rows", [])
-        initial = None
-        selected_iid = None
-        if edit:
-            selected = self.mapping_tree.selection() if hasattr(self, "mapping_tree") else []
-            if not selected:
-                messagebox.showerror("Error", "Please select a mapping row to edit.")
-                return
-            selected_iid = selected[0]
-            values = self.mapping_tree.item(selected_iid, "values")
-            initial = dict(zip(self.mapping_columns, values))
-        values = self._prompt_for_values("Mapping Row", self.mapping_columns, initial)
-        if values is None:
+    def load_template_item(self, event, template_type):
+        """Load a template mapping into the editor widgets."""
+        try:
+            selected_index = event.widget.curselection()[0]
+            selected_name = event.widget.get(selected_index)
+        except IndexError:
             return
-        if edit and selected_iid:
-            idx = self.mapping_tree.index(selected_iid)
-            rows[idx] = values
-        else:
-            rows.append(values)
-        self.app_config["mapping_rows"] = rows
-        self.refresh_mapping_views()
+        if not hasattr(self, "template_editor_fields"):
+            return
+
+        template_map = self.get_template_mapping(template_type)
+        (
+            claim_group_combo,
+            contract_code_entry,
+            generated_name_var,
+            entry_path,
+            type_combo,
+            refresh_generated_name,
+        ) = self.template_editor_fields
+
+        claim_group, contract_code = self.parse_template_filename(template_type, selected_name)
+        type_combo.set(template_type.capitalize())
+        claim_group_combo.delete(0, tk.END)
+        claim_group_combo.insert(0, claim_group)
+        contract_code_entry.configure(state=tk.NORMAL)
+        contract_code_entry.delete(0, tk.END)
+        contract_code_entry.insert(0, contract_code)
+        entry_path.delete(0, tk.END)
+        entry_path.insert(0, template_map.get(selected_name, ""))
+        refresh_generated_name()
+        if not generated_name_var.get() and selected_name:
+            generated_name_var.set(selected_name)
+
+    def save_template_item(
+        self,
+        template_type,
+        claim_group_combo,
+        contract_code_entry,
+        generated_name_var,
+        entry_path,
+    ):
+        """Persist a template mapping and normalize the template filename."""
+        claim_group = claim_group_combo.get().strip()
+        contract_code = contract_code_entry.get().strip()
+        if not self.validate_template_filename_parts(template_type, claim_group, contract_code):
+            return
+
+        item_name = self.build_template_filename(template_type, claim_group, contract_code)
+        generated_name_var.set(item_name)
+        item_path = entry_path.get().strip()
+        moved_path = self.move_template_to_expected_filename(template_type, item_path, item_name)
+        if not moved_path:
+            return
+
+        entry_path.delete(0, tk.END)
+        entry_path.insert(0, moved_path)
+        template_map = self.get_template_mapping(template_type)
+        stale_keys = [
+            key for key, path in template_map.items()
+            if path == item_path and key != item_name
+        ]
+        for key in stale_keys:
+            del template_map[key]
+        template_map[item_name] = moved_path
         self.save_config()
+        listbox = self.template_listboxes.get(template_type)
+        if listbox:
+            self.populate_listbox(listbox, template_map)
+            matching = sorted(template_map.keys()).index(item_name)
+            listbox.selection_clear(0, tk.END)
+            listbox.selection_set(matching)
+            listbox.see(matching)
+        self.update_main_combos()
+        self.update_status_bar(
+            f"{template_type.capitalize()} template '{item_name}' saved."
+        )
 
-    def remove_mapping_row(self):
-        selected = self.mapping_tree.selection() if hasattr(self, "mapping_tree") else []
-        if not selected:
+    def delete_template_item(
+        self,
+        template_type,
+        claim_group_combo,
+        contract_code_entry,
+        generated_name_var,
+        entry_path,
+        type_combo,
+    ):
+        """Delete the selected template mapping entry."""
+        listbox = self.template_listboxes.get(template_type)
+        if not listbox:
             return
-        selected_name = listbox.get(selected_indices[0])
-        if selected_name in data_dict:
+        selected_indices = listbox.curselection()
+        selected_name = (
+            listbox.get(selected_indices[0])
+            if selected_indices
+            else generated_name_var.get().strip()
+        )
+        if not selected_name:
+            messagebox.showerror("Error", "No template selected to delete.")
+            return
+        template_map = self.get_template_mapping(template_type)
+        if selected_name in template_map:
             if messagebox.askyesno(
-                "Confirm Delete",
-                f"Are you sure you want to delete Payer Contact '{selected_name}'?",
+                "Confirm Delete", f"Remove '{selected_name}' from the template library?"
             ):
-                del data_dict[selected_name]
+                del template_map[selected_name]
                 self.save_config()
-                self.populate_listbox(listbox, data_dict)
-                self.clear_payer_editor(editor_entries)
+                self.populate_listbox(listbox, template_map)
+                self.clear_template_editor(
+                    claim_group_combo,
+                    contract_code_entry,
+                    generated_name_var,
+                    entry_path,
+                    type_combo,
+                )
                 self.update_main_combos()
-                self.update_status_bar(f"Payer Contact '{selected_name}' deleted.")
+                self.update_status_bar(
+                    f"{template_type.capitalize()} template '{selected_name}' deleted."
+                )
+
+    def clear_template_editor(
+        self,
+        claim_group_combo,
+        contract_code_entry,
+        generated_name_var,
+        entry_path,
+        type_combo,
+    ):
+        """Reset the template editor fields to empty values."""
+        claim_group_combo.delete(0, tk.END)
+        contract_code_entry.configure(state=tk.NORMAL)
+        contract_code_entry.delete(0, tk.END)
+        entry_path.delete(0, tk.END)
+        generated_name_var.set("")
+        if type_combo.get().lower() != "form":
+            contract_code_entry.configure(state=tk.DISABLED)
+    def _open_mapping_row_form(self, initial=None):
+        """Open a full mapping-row editor and return the entered values."""
+
+        initial = initial or {}
+        result = {"values": None}
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Method Mapping" if initial else "Add Method Mapping")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(True, True)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(dialog, padding=14)
+        container.grid(row=0, column=0, sticky=tk.NSEW)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        identity_frame = ttk.LabelFrame(container, text="Routing")
+        identity_frame.grid(row=0, column=0, sticky=tk.EW, pady=(0, 10))
+        for grid_col in (1, 3):
+            identity_frame.columnconfigure(grid_col, weight=1)
+
+        text_fields = {}
+        for field_name, row_index, col_index in (
+            ("Claim User Group", 0, 0),
+            ("Contract Code", 0, 2),
+            ("Payer Name", 1, 0),
+            ("Attention To", 1, 2),
+        ):
+            ttk.Label(identity_frame, text=f"{field_name}:").grid(
+                row=row_index, column=col_index, sticky=tk.E, padx=5, pady=5
+            )
+            entry = ttk.Entry(identity_frame, width=34)
+            entry.grid(row=row_index, column=col_index + 1, sticky=tk.EW, padx=5, pady=5)
+            entry.insert(0, str(initial.get(field_name, "")))
+            text_fields[field_name] = entry
+
+        method_frame = ttk.LabelFrame(container, text="Methods")
+        method_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=(0, 10))
+        method_frame.columnconfigure(2, weight=1)
+        ttk.Label(method_frame, text="Type").grid(row=0, column=1, sticky=tk.W, padx=5, pady=(5, 2))
+        ttk.Label(method_frame, text="Contact").grid(row=0, column=2, sticky=tk.W, padx=5, pady=(5, 2))
+
+        method_type_widgets = {}
+        method_contact_widgets = {}
+        for method_number in range(1, 4):
+            row_index = method_number
+            ttk.Label(method_frame, text=f"Method {method_number}:").grid(
+                row=row_index, column=0, sticky=tk.NE, padx=5, pady=5
+            )
+            type_field = f"Method {method_number} Type"
+            contact_field = f"Method {method_number} Contact"
+            type_combo = ttk.Combobox(method_frame, values=["", "Fax", "Mail"], state="readonly", width=12)
+            type_combo.grid(row=row_index, column=1, sticky=tk.NW, padx=5, pady=5)
+            type_value = str(initial.get(type_field, "")).strip().capitalize()
+            type_combo.set(type_value if type_value in {"Fax", "Mail"} else "")
+            contact_text = tk.Text(method_frame, width=58, height=3, wrap=tk.WORD)
+            contact_text.grid(row=row_index, column=2, sticky=tk.EW, padx=5, pady=5)
+            contact_text.insert("1.0", str(initial.get(contact_field, "")))
+            method_type_widgets[type_field] = type_combo
+            method_contact_widgets[contact_field] = contact_text
+
+        options_frame = ttk.LabelFrame(container, text="Selection")
+        options_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
+        ttk.Label(options_frame, text="Method To Use:").grid(row=0, column=0, sticky=tk.E, padx=5, pady=5)
+        method_to_use_combo = ttk.Combobox(options_frame, values=["1", "2", "3"], state="readonly", width=8)
+        method_to_use_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        method_to_use = str(initial.get("MethodToUse", "")).strip()
+        method_to_use_combo.set(method_to_use if method_to_use in {"1", "2", "3"} else "1")
+        form_var = tk.BooleanVar(value=str(initial.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"})
+        ttk.Checkbutton(options_frame, text="Requires form", variable=form_var).grid(row=0, column=2, sticky=tk.W, padx=20, pady=5)
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=3, column=0, sticky=tk.E)
+
+        def collect_values():
+            values = {col: "" for col in self.mapping_columns}
+            for field_name, entry in text_fields.items():
+                values[field_name] = entry.get().strip()
+            for field_name, combo in method_type_widgets.items():
+                values[field_name] = combo.get().strip()
+            for field_name, text_widget in method_contact_widgets.items():
+                values[field_name] = text_widget.get("1.0", tk.END).strip()
+            values["MethodToUse"] = method_to_use_combo.get().strip()
+            values["Form?"] = "Yes" if form_var.get() else "No"
+            return values
+
+        def save_and_close():
+            values = collect_values()
+            missing = [field for field in ("Claim User Group", "Contract Code", "Payer Name", "MethodToUse") if not values.get(field)]
+            if missing:
+                messagebox.showerror("Missing Required Fields", "Please complete: " + ", ".join(missing), parent=dialog)
+                return
+            selected_method = values["MethodToUse"]
+            if not values.get(f"Method {selected_method} Type") or not values.get(f"Method {selected_method} Contact"):
+                messagebox.showerror("Missing Selected Method", f"Method {selected_method} needs both Type and Contact.", parent=dialog)
+                return
+            result["values"] = values
+            dialog.destroy()
+
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="Save", command=save_and_close).pack(side=tk.RIGHT)
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+        dialog.bind("<Control-Return>", lambda event: save_and_close())
+        dialog.update_idletasks()
+        width = min(max(dialog.winfo_reqwidth(), 760), max(760, self.winfo_screenwidth() - 80))
+        height = min(max(dialog.winfo_reqheight(), 520), max(520, self.winfo_screenheight() - 100))
+        x = max(0, self.winfo_rootx() + (self.winfo_width() - width) // 2)
+        y = max(0, self.winfo_rooty() + (self.winfo_height() - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        text_fields["Claim User Group"].focus_set()
+        self.wait_window(dialog)
+        return result["values"]
+
+    def _browse_into_entry(self, entry_widget):
+        """Prompt for a folder and place the selected path into an entry."""
+
+        folder_path = filedialog.askdirectory(title="Select Mailing Folder", parent=self)
+        if folder_path:
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, folder_path)
+
+    def _open_acronym_row_form(self, initial=None):
+        """Open a visible editor for a claim-user-group acronym row."""
+
+        initial = initial or {}
+        result = {"values": None}
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Acronym" if initial else "Add Acronym")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        container = ttk.Frame(dialog, padding=14)
+        container.grid(row=0, column=0, sticky=tk.NSEW)
+        container.columnconfigure(1, weight=1)
+
+        ttk.Label(container, text="Claim User Group:").grid(row=0, column=0, sticky=tk.E, padx=5, pady=6)
+        claim_group_entry = ttk.Entry(container, width=42)
+        claim_group_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=6)
+        claim_group_entry.insert(0, str(initial.get("Claim User Group", "")))
+
+        ttk.Label(container, text="Acronym:").grid(row=1, column=0, sticky=tk.E, padx=5, pady=6)
+        acronym_entry = ttk.Entry(container, width=42)
+        acronym_entry.grid(row=1, column=1, sticky=tk.EW, padx=5, pady=6)
+        acronym_entry.insert(0, str(initial.get("Acronym", "")))
+
+        ttk.Label(container, text="Mailing Folder:").grid(row=2, column=0, sticky=tk.E, padx=5, pady=6)
+        mailing_folder_entry = ttk.Entry(container, width=42)
+        mailing_folder_entry.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=6)
+        mailing_folder_entry.insert(0, str(initial.get("Mailing Folder", "")))
+        ttk.Button(container, text="Browse...", command=lambda: self._browse_into_entry(mailing_folder_entry)).grid(row=2, column=2, sticky=tk.W, padx=5, pady=6)
+
+        button_frame = ttk.Frame(container)
+        button_frame.grid(row=3, column=0, columnspan=3, sticky=tk.E, pady=(10, 0))
+
+        def save_and_close():
+            values = {
+                "Claim User Group": claim_group_entry.get().strip(),
+                "Acronym": acronym_entry.get().strip(),
+                "Mailing Folder": mailing_folder_entry.get().strip(),
+            }
+            missing = [field for field, value in values.items() if field != "Mailing Folder" and not value]
+            if missing:
+                messagebox.showerror("Missing Required Fields", "Please complete: " + ", ".join(missing), parent=dialog)
+                return
+            result["values"] = values
+            dialog.destroy()
+
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="Save", command=save_and_close).pack(side=tk.RIGHT)
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+        dialog.bind("<Return>", lambda event: save_and_close())
+        dialog.update_idletasks()
+        width = max(dialog.winfo_reqwidth(), 620)
+        height = max(dialog.winfo_reqheight(), 220)
+        x = max(0, self.winfo_rootx() + (self.winfo_width() - width) // 2)
+        y = max(0, self.winfo_rooty() + (self.winfo_height() - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        claim_group_entry.focus_set()
+        self.wait_window(dialog)
+        return result["values"]
+
     def clear_payer_editor(self, editor_entries):
         """Clear all payer contact editor input widgets."""
         for entry in editor_entries.values():
@@ -1535,7 +2231,7 @@ class MergeApp(tk.Tk):
             selected_iid = selected[0]
             values = self.mapping_tree.item(selected_iid, "values")
             initial = dict(zip(self.mapping_columns, values))
-        values = self._prompt_for_values("Mapping Row", self.mapping_columns, initial)
+        values = self._open_mapping_row_form(initial)
         if values is None:
             return
         if edit and selected_iid:
@@ -1571,7 +2267,7 @@ class MergeApp(tk.Tk):
             selected_iid = selected[0]
             values = self.acronym_tree.item(selected_iid, "values")
             initial = dict(zip(self.acronym_columns, values))
-        values = self._prompt_for_values("Acronym Row", self.acronym_columns, initial)
+        values = self._open_acronym_row_form(initial)
         if values is None:
             return
         if edit and selected_iid:
@@ -1612,6 +2308,10 @@ class MergeApp(tk.Tk):
                 self.app_config["special_cols"]["contract_code_col"] = self.combo_contract_code_col.get()
             if hasattr(self, "combo_contract_name_col"):
                 self.app_config["special_cols"]["contract_name_col"] = self.combo_contract_name_col.get()
+            if hasattr(self, "auto_detect_blurb_var"):
+                self.app_config["auto_detect_blurb"] = bool(self.auto_detect_blurb_var.get())
+            if hasattr(self, "combo_blurb"):
+                self.app_config["selected_blurb"] = self.combo_blurb.get() or "(None)"
             if hasattr(self, "entry_excel"):
                 self.app_config["excel_path"] = self.entry_excel.get()
             if hasattr(self, "entry_output"):
@@ -1790,8 +2490,50 @@ class MergeApp(tk.Tk):
             self.entry_output.insert(0, dirpath)
             self.save_config()
     # --- Column Config & Placeholder Logic ---
-    def populate_column_config_tab(self):
-        """Render column format controls based on the loaded dataframe."""
+    def _get_column_format_grid_count(self, width=None):
+        """Choose how many format-control columns can fit in the current tab."""
+
+        if width is None:
+            width = self.col_config_canvas.winfo_width() if hasattr(self, "col_config_canvas") else 0
+        if width <= 1:
+            width = max(1, self.winfo_width() - 60)
+        return max(1, min(4, width // 340))
+
+    def _sync_column_format_widgets_to_config(self):
+        """Keep in-memory column format choices before rebuilding the grid."""
+
+        for col, widgets in getattr(self, "column_widgets", {}).items():
+            combo = widgets.get("combo")
+            if combo is not None:
+                self.app_config["column_formats"][col] = combo.get()
+
+    def _on_column_format_canvas_configure(self, event):
+        """Resize the scrollable frame and reflow controls when width changes."""
+
+        if hasattr(self, "col_config_window_id"):
+            self.col_config_canvas.itemconfigure(self.col_config_window_id, width=event.width)
+        if self.df is None or not hasattr(self, "col_config_scrollable_frame"):
+            return
+        new_count = self._get_column_format_grid_count(event.width)
+        if new_count == getattr(self, "column_format_grid_columns", None):
+            return
+        pending_relayout = getattr(self, "_column_format_relayout_after", None)
+        if pending_relayout:
+            try:
+                self.after_cancel(pending_relayout)
+            except tk.TclError:
+                pass
+
+        def reflow():
+            self._column_format_relayout_after = None
+            self._render_column_format_controls(new_count)
+
+        self._column_format_relayout_after = self.after(120, reflow)
+
+    def _render_column_format_controls(self, grid_columns=None):
+        """Lay out Excel column format controls in a wrapped grid."""
+
+        self._sync_column_format_widgets_to_config()
         for widget in self.col_config_scrollable_frame.winfo_children():
             widget.destroy()
         self.column_widgets.clear()
@@ -1799,6 +2541,42 @@ class MergeApp(tk.Tk):
             ttk.Label(
                 self.col_config_scrollable_frame, text="Load an Excel file first."
             ).pack(pady=20)
+            return
+
+        format_options = [
+            "Text",
+            "Date (MM/DD/YYYY)",
+            "Monetary ($#,##.##)",
+            "Percentage (##.##%)",
+        ]
+        grid_columns = grid_columns or self._get_column_format_grid_count()
+        self.column_format_grid_columns = grid_columns
+        for grid_col in range(grid_columns):
+            self.col_config_scrollable_frame.columnconfigure(grid_col, weight=1, uniform="format_col")
+
+        for i, col in enumerate(self.df.columns):
+            row_index = i // grid_columns
+            col_index = i % grid_columns
+            item_frame = ttk.Frame(self.col_config_scrollable_frame, padding=(5, 2))
+            item_frame.grid(row=row_index, column=col_index, sticky=tk.EW, padx=4, pady=2)
+            item_frame.columnconfigure(0, weight=1)
+            lbl = ttk.Label(
+                item_frame, text=col, anchor=tk.W, relief="groove", padding=2
+            )
+            lbl.grid(row=0, column=0, sticky=tk.EW)
+            combo = ttk.Combobox(
+                item_frame, values=format_options, state="readonly", width=22
+            )
+            combo.grid(row=0, column=1, padx=(5, 0), sticky=tk.EW)
+            saved_format = self.app_config["column_formats"].get(col, "Text")
+            combo.set(saved_format if saved_format in format_options else "Text")
+            combo.bind("<<ComboboxSelected>>", self.save_config)
+            self.column_widgets[col] = {"label": lbl, "combo": combo}
+
+    def populate_column_config_tab(self):
+        """Render column format controls based on the loaded dataframe."""
+        if self.df is None:
+            self._render_column_format_controls()
             return
         col_names = [""] + sorted(list(self.df.columns))
         self.combo_account_col["values"] = col_names
@@ -1819,28 +2597,7 @@ class MergeApp(tk.Tk):
             self.combo_contract_name_col["values"] = col_names
             saved = self.app_config["special_cols"].get("contract_name_col", "")
             self.combo_contract_name_col.set(saved if saved in col_names else "")
-        format_options = [
-            "Text",
-            "Date (MM/DD/YYYY)",
-            "Monetary ($#,##.##)",
-            "Percentage (##.##%)",
-        ]
-        for i, col in enumerate(self.df.columns):
-            row_frame = ttk.Frame(self.col_config_scrollable_frame)
-            row_frame.pack(fill=tk.X, padx=5, pady=1)
-            lbl = ttk.Label(
-                row_frame, text=col, width=30, anchor=tk.W, relief="groove", padding=2
-            )
-            lbl.grid(row=i, column=0, sticky=tk.W)
-            combo = ttk.Combobox(
-                row_frame, values=format_options, state="readonly", width=25
-            )
-            combo.grid(row=i, column=1, padx=5, sticky=tk.EW)
-            self.register_grid_weights(row_frame, {1: 1})
-            saved_format = self.app_config["column_formats"].get(col, "Text")
-            combo.set(saved_format if saved_format in format_options else "Text")
-            combo.bind("<<ComboboxSelected>>", self.save_config)
-            self.column_widgets[col] = {"label": lbl, "combo": combo}
+        self._render_column_format_controls()
     def update_placeholder_list(self):
         """Refresh the placeholder reference text shown in the blurb tab."""
         if not hasattr(self, 'placeholder_text'):
@@ -1863,7 +2620,10 @@ class MergeApp(tk.Tk):
         self.placeholder_text.insert(
             tk.END, "\n--- Letter & Form Templates Only ---\n", "bold"
         )
-        self.placeholder_text.insert(tk.END, "{{AddressBlock}} (From Addresses tab)\n")
+        self.placeholder_text.insert(
+            tk.END,
+            "{{AddressBlock}} (Payer name + Attention To + selected fax/mail contact)\n",
+        )
         self.placeholder_text.insert(tk.END, "{{BlurbBlock}} (From Blurbs tab)\n")
         self.placeholder_text.insert(tk.END, "{{SubjectBlock}} (From Blurbs tab)\n")
         self.placeholder_text.insert(
@@ -1873,7 +2633,7 @@ class MergeApp(tk.Tk):
         for key in sorted(user_keys):
             self.placeholder_text.insert(tk.END, f"{{{{{key}}}}}\n")
         self.placeholder_text.insert(
-            tk.END, "\n--- Payer Contact Info (From Selected Payer) ---\n", "bold"
+            tk.END, "\n--- Payer Contact Info (From Mapping Table) ---\n", "bold"
         )
         self.placeholder_text.insert(tk.END, "{{payer_name}}\n")
         self.placeholder_text.insert(tk.END, "{{payer_fax}}\n")
@@ -2092,6 +2852,12 @@ class MergeApp(tk.Tk):
             )
             self.notebook.select(self.tab_config)
             return False
+        if self.auto_detect_blurb_var.get() and "BlurbName" not in self.df.columns:
+            messagebox.showerror(
+                "Error",
+                "Auto-detect blurb is enabled, so the Excel file must include a 'BlurbName' column.",
+            )
+            return False
         return True
     # --- NOTE EXTRACTION V2 (Heavily modified function) ---
     def run_extract_notes(self):
@@ -2236,10 +3002,18 @@ class MergeApp(tk.Tk):
         return matches[0] if matches else None
 
     def _find_acronym(self, claim_user_group):
+        row = self._find_acronym_row(claim_user_group)
+        return row.get("Acronym", "") if row else ""
+
+    def _find_acronym_row(self, claim_user_group):
         for row in self.app_config.get("acronym_rows", []):
             if str(row.get("Claim User Group", "")).strip() == str(claim_user_group).strip():
-                return row.get("Acronym", "")
-        return ""
+                return row
+        return None
+
+    def _find_mailing_folder(self, claim_user_group):
+        row = self._find_acronym_row(claim_user_group)
+        return clean_text_value(row.get("Mailing Folder", "")) if row else ""
 
     def _resolve_required_templates(self, ugid, contract_code, needs_form):
         def find_template(template_type, target_filename):
@@ -2269,138 +3043,107 @@ class MergeApp(tk.Tk):
         method_to_use = str(mapping_row.get("MethodToUse", "")).strip()
         if method_to_use not in {"1", "2", "3"}:
             return None, None, "Invalid MethodToUse value"
-        field_name = {
-            "1": "1st Method + Contact (1)",
-            "2": "2nd Method + Contact (2)",
-            "3": "3rd Method + Contact (3)",
-        }[method_to_use]
-        method_value = str(mapping_row.get(field_name, "")).strip()
-        if method_value.startswith("Fax - "):
-            return "Fax", method_value.replace("Fax - ", "", 1).strip(), None
-        if method_value.startswith("Mail - "):
-            return "Mail", method_value.replace("Mail - ", "", 1).strip(), None
-        return None, None, "Invalid method format"
+        type_field = f"Method {method_to_use} Type"
+        contact_field = f"Method {method_to_use} Contact"
+        method_type = clean_text_value(mapping_row.get(type_field, ""))
+        contact = clean_text_value(mapping_row.get(contact_field, ""))
+        if not method_type:
+            return None, None, "Missing method type"
+        method_type_norm = method_type.strip().capitalize()
+        if method_type_norm in {"Fax", "Mail"}:
+            return method_type_norm, contact, None
+        return None, None, "Invalid method type"
 
-    def run_generate_appeals(self):
-        failures = []
-        successes = []
+    def _copy_file_flat_unique(self, source_path, destination_folder):
+        """Copy one generated file into a folder without copying parent folders."""
+
+        source = Path(source_path)
+        destination = Path(destination_folder)
+        destination.mkdir(parents=True, exist_ok=True)
+        target = destination / source.name
+        if target.exists():
+            stem = source.stem
+            suffix = source.suffix
+            counter = 2
+            while target.exists():
+                target = destination / f"{stem} ({counter}){suffix}"
+                counter += 1
+        shutil.copy2(source, target)
+        return target
+
+    def cleanup_failed_output(self, account_dir, created_paths=None):
+        """Remove partial files and empty folders left by a failed row."""
+
+        created_paths = created_paths or []
+        for file_path in created_paths:
+            try:
+                path = Path(file_path)
+                if path.exists() and path.is_file():
+                    path.unlink()
+            except Exception as exc:
+                self.q_print(f"Cleanup warning for {file_path}: {exc}")
+
         try:
-            all_rows = list(self.df.iterrows())
-            self.reset_progress(len(all_rows), "Generate Appeals")
-            for index, row in all_rows:
+            output_root = Path(self.output_path).resolve()
+            current = Path(account_dir).resolve()
+            while current != output_root and output_root in current.parents:
                 try:
-                    account = sanitize_path_component(row.get(self.account_col_name, ""))
-                    ugid = sanitize_path_component(row.get(self.claim_user_group_col, ""))
-                    contract_code = sanitize_path_component(row.get(self.contract_code_col, ""))
-                    contract_name = sanitize_path_component(row.get(self.contract_name_col, ""))
-                    if not ugid or not contract_code:
-                        failures.append((index, "Mapping not found"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    mapping_row = self._lookup_mapping_row(ugid, contract_code)
-                    if not mapping_row:
-                        failures.append((index, "Mapping not found"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    method_type, address_block, method_err = self._parse_selected_method(mapping_row)
-                    if method_err:
-                        failures.append((index, method_err))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    form_flag = str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
-                    letter_template, second_template, template_err = self._resolve_required_templates(ugid, contract_code, form_flag)
-                    if template_err:
-                        failures.append((index, template_err))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    route_folder = "Faxed Letters" if method_type == "Fax" else "Mailed Letters"
-                    now = datetime.now()
-                    path_parts = [
-                        sanitize_path_component(ugid),
-                        route_folder,
-                        sanitize_path_component(f"{contract_code} - {contract_name}"),
-                        sanitize_path_component(f"Year {now.strftime('%Y')}"),
-                        sanitize_path_component(f"Month {now.strftime('%m.%Y')}"),
-                        sanitize_path_component(f"Day {now.strftime('%m%d%y')}"),
-                        sanitize_path_component(account),
-                    ]
-                    target_dir = Path(self.output_path)
-                    for part in path_parts:
-                        target_dir = target_dir / sanitize_path_component(part)
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    row_data = self.format_row_data(row)
-                    blurb_body, blurb_subject = self.get_blurb_payload(self.combo_blurb.get() if hasattr(self, "combo_blurb") else "(None)")
-                    context = self.build_letter_merge_dict(row_data, blurb_body, blurb_subject)
-                    context["AddressBlock"] = address_block
-                    context["payer_name"] = mapping_row.get("Payer Name", "")
-                    context["payer_fax"] = address_block if method_type == "Fax" else ""
-                    context["payer_attn"] = ""
-                    acronym = self._find_acronym(ugid)
-                    filename_base = sanitize_path_component(f"{self.file_date_str}.{acronym}.{account}")
-                    letter_base = str(target_dir / f"{filename_base} - Letter")
-                    letter_path = self.create_and_save_doc(letter_template, letter_base, context)
-                    if not letter_path:
-                        failures.append((index, "Letter generation error"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    if form_flag:
-                        second_base = str(target_dir / f"{filename_base} - Form")
-                        output2 = self.create_and_save_doc(second_template, second_base, context)
-                    else:
-                        fax_context = dict(context)
-                        fax_context["total_pages"] = max(1, get_docx_page_count(letter_path))
-                        second_base = str(target_dir / f"{filename_base} - Fax")
-                        output2 = self.create_and_save_doc(second_template, second_base, fax_context)
-                    if not output2:
-                        failures.append((index, "Secondary document generation error"))
-                        if os.path.exists(letter_path):
-                            os.remove(letter_path)
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    successes.append({
-                        "index": index,
-                        "letter_path": letter_path,
-                        "method_type": method_type,
-                        "payer_name": mapping_row.get("Payer Name", ""),
-                        "address_block": address_block,
-                        "ugid": ugid,
-                        "workflow_reason": row.get("Workflow_Reason", ""),
-                        "account": account,
-                    })
-                except Exception as row_exc:
-                    failures.append((index, f"Row error: {row_exc}"))
-                finally:
-                    self.increment_progress("Generate Appeals")
-            self.last_successful_items = successes
-            if failures:
-                self.export_failures(failures)
-            if successes:
-                self.extract_notes_from_successes(successes)
-            msg = f"Generation finished. Success: {len(successes)} | Failed: {len(failures)}"
-            self.finalize_progress(msg)
-            messagebox.showinfo("Generation Complete", msg)
-        finally:
-            self.set_buttons_state("normal")
+                    current.rmdir()
+                except OSError:
+                    break
+                current = current.parent
+        except Exception as exc:
+            self.q_print(f"Folder cleanup warning for {account_dir}: {exc}")
 
-    def export_failures(self, failures):
-        """Write failed rows to a failure workbook with reason column."""
-        if not failures:
-            return
-        failed_indices = [idx for idx, _ in failures]
-        reason_map = {idx: reason for idx, reason in failures}
-        failure_df = self.df.loc[failed_indices].copy()
-        failure_df["Failure Reason"] = [reason_map.get(i, "") for i in failure_df.index]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = Path(self.output_path) / f"Failed_Rows_{timestamp}.xlsx"
-        failure_df.to_excel(out_path, index=False)
-        self.q_print(f"Failure file created: {out_path}")
+    def copy_mail_outputs_to_mailing_folders(self, successes):
+        """Copy generated Mail files into each Claim User Group's mailing folder."""
+
+        copied = 0
+        failures = []
+        for item in successes:
+            if item.get("method_type") != "Mail":
+                continue
+            mailing_folder = clean_text_value(item.get("mailing_folder", ""))
+            if not mailing_folder:
+                failures.append((item.get("index"), "Missing Mailing Folder for Claim User Group"))
+                continue
+            for file_path in item.get("generated_paths", []):
+                try:
+                    if file_path and os.path.exists(file_path):
+                        self._copy_file_flat_unique(file_path, mailing_folder)
+                        copied += 1
+                except Exception as exc:
+                    failures.append((item.get("index"), f"Mailing folder copy failed for {Path(file_path).name}: {exc}"))
+        if copied:
+            self.q_print(f"Copied {copied} mailed appeal file(s) into mailing folders.")
+        return failures
+
+    def get_generation_row_groups(self):
+        """Return ordered row groups keyed by Claim User Group and Contract Code."""
+
+        rows = list(self.df.iterrows())
+        grouped = {}
+        for original_order, (index, row) in enumerate(rows):
+            ugid = sanitize_path_component(row.get(self.claim_user_group_col, ""))
+            contract_code = sanitize_path_component(row.get(self.contract_code_col, ""))
+            grouped.setdefault((ugid, contract_code), []).append((original_order, index, row))
+
+        ordered_groups = []
+        for group_key in sorted(grouped, key=lambda key: (key[0].lower(), key[1].lower())):
+            group_rows = sorted(grouped[group_key], key=lambda item: item[0])
+            ordered_groups.append((group_key, [(index, row) for _, index, row in group_rows]))
+        return ordered_groups
 
     def extract_notes_from_successes(self, successes):
         """Automatically build notes files after generation for successful rows."""
-        grouped = {"Mail": [], "Fax": []}
+        # Group extracted notes by the "day" folder (two levels up from the letter file)
         start_text = self.app_config["extract_config"].get("start", DEFAULT_EXTRACT_START)
         end_text = self.app_config["extract_config"].get("end", DEFAULT_EXTRACT_END)
         pattern = rf"({re.escape(start_text)}.*?)(?={re.escape(end_text)})" if end_text else rf"({re.escape(start_text)}.*)"
+
+        day_method_rows = {}  # key: (day_folder_str, method) -> list of rows
+        fax_ready_files = {}  # key: day_folder_str -> set of fax filenames
+
         for item in successes:
             try:
                 doc = Document(item["letter_path"])
@@ -2411,244 +3154,69 @@ class MergeApp(tk.Tk):
                     heading = f"Appeal letter mailed to {item['payer_name']}, address: {item['address_block']}. Noted as:"
                     status = "Appeal letter mailed"
                 else:
-                    heading = f"Appeal letter faxed to {item['payer_name']}, fax number: {item['address_block']}. Noted as:"
+                    attn_text = f", attention to: {item['payer_attn']}" if item.get("payer_attn") else ""
+                    heading = f"Appeal letter faxed to {item['payer_name']}{attn_text}, fax number: {item.get('payer_fax', '')}. Noted as:"
                     status = "Appeal letter faxed"
-                grouped[item["method_type"]].append([
-                    item["account"],
-                    f"{heading}\n{extracted_text}\nSaved as: {Path(item['letter_path']).stem}",
-                    item["ugid"],
+
+                saved_as = Path(item['letter_path']).stem
+                row_entry = [
+                    item.get('account', ''),
+                    f"{heading}\n{extracted_text}\nSaved as: {saved_as}",
+                    item.get('ugid', ''),
                     status,
-                    item["workflow_reason"],
+                    item.get('workflow_reason', ''),
                     "",
-                ])
-            except Exception as exc:
-                self.q_print(f"Note extraction warning for {item.get('account')}: {exc}")
-        self.last_notes_file_paths = []
-        timestamp = datetime.now().strftime("%m%d%y%H%M%S")
-        for method, rows in grouped.items():
-            if not rows:
-                continue
-            notes_path = Path(self.output_path) / f"Notes_{method}_{timestamp}.xlsx"
-            df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
-            df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
-            self._add_notes_table(notes_path)
-            self.last_notes_file_paths.append(str(notes_path))
-        if self.last_notes_file_paths and hasattr(self, "btn_send_to_bot"):
-            self.btn_send_to_bot.config(state=tk.NORMAL)
+                ]
 
-    def start_letter_merge_thread(self):
-        """Kick off the appeal letter merge in a background thread."""
-        if not self.validate_common_inputs():
-            return
-        self.set_buttons_state("disabled")
-        threading.Thread(target=self.run_generate_appeals, daemon=True).start()
-
-    def _lookup_mapping_row(self, claim_user_group, contract_code):
-        matches = [
-            row for row in self.app_config.get("mapping_rows", [])
-            if str(row.get("Claim User Group", "")).strip() == str(claim_user_group).strip()
-            and str(row.get("Contract Code", "")).strip() == str(contract_code).strip()
-        ]
-        return matches[0] if matches else None
-
-    def _find_acronym(self, claim_user_group):
-        for row in self.app_config.get("acronym_rows", []):
-            if str(row.get("Claim User Group", "")).strip() == str(claim_user_group).strip():
-                return row.get("Acronym", "")
-        return ""
-
-    def _resolve_required_templates(self, ugid, contract_code, needs_form):
-        def find_template(template_type, target_filename):
-            default_dir = Path(self.get_template_folder_path(template_type))
-            candidate = default_dir / target_filename
-            if candidate.exists():
-                return str(candidate)
-            for path in self.get_template_mapping(template_type).values():
-                if Path(path).name.lower() == target_filename.lower() and Path(path).exists():
-                    return path
-            return ""
-
-        letter_path = find_template("letter", f"{ugid} - Letter template.docx")
-        if not letter_path or not os.path.exists(letter_path):
-            return None, None, "Letter template missing"
-        if needs_form:
-            form_path = find_template("form", f"{ugid} - Form - {contract_code}.docx")
-            if not form_path or not os.path.exists(form_path):
-                return None, None, "Form template missing"
-            return letter_path, form_path, None
-        fax_path = find_template("fax", f"{ugid} - Fax.docx")
-        if not fax_path or not os.path.exists(fax_path):
-            return None, None, "Fax template missing"
-        return letter_path, fax_path, None
-
-    def _parse_selected_method(self, mapping_row):
-        method_to_use = str(mapping_row.get("MethodToUse", "")).strip()
-        if method_to_use not in {"1", "2", "3"}:
-            return None, None, "Invalid MethodToUse value"
-        field_name = {
-            "1": "1st Method + Contact (1)",
-            "2": "2nd Method + Contact (2)",
-            "3": "3rd Method + Contact (3)",
-        }[method_to_use]
-        method_value = str(mapping_row.get(field_name, "")).strip()
-        if method_value.startswith("Fax - "):
-            return "Fax", method_value.replace("Fax - ", "", 1).strip(), None
-        if method_value.startswith("Mail - "):
-            return "Mail", method_value.replace("Mail - ", "", 1).strip(), None
-        return None, None, "Invalid method format"
-
-    def run_generate_appeals(self):
-        failures = []
-        successes = []
-        try:
-            all_rows = list(self.df.iterrows())
-            self.reset_progress(len(all_rows), "Generate Appeals")
-            for index, row in all_rows:
+                # Day folder is two levels up from the letter file (Account -> Day)
                 try:
-                    account = sanitize_path_component(row.get(self.account_col_name, ""))
-                    ugid = sanitize_path_component(row.get(self.claim_user_group_col, ""))
-                    contract_code = sanitize_path_component(row.get(self.contract_code_col, ""))
-                    contract_name = sanitize_path_component(row.get(self.contract_name_col, ""))
-                    if not ugid or not contract_code:
-                        failures.append((index, "Mapping not found"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    mapping_row = self._lookup_mapping_row(ugid, contract_code)
-                    if not mapping_row:
-                        failures.append((index, "Mapping not found"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    method_type, address_block, method_err = self._parse_selected_method(mapping_row)
-                    if method_err:
-                        failures.append((index, method_err))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    form_flag = str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
-                    letter_template, second_template, template_err = self._resolve_required_templates(ugid, contract_code, form_flag)
-                    if template_err:
-                        failures.append((index, template_err))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    route_folder = "Faxed Letters" if method_type == "Fax" else "Mailed Letters"
-                    now = datetime.now()
-                    path_parts = [
-                        sanitize_path_component(ugid),
-                        route_folder,
-                        sanitize_path_component(f"{contract_code} - {contract_name}"),
-                        sanitize_path_component(f"Year {now.strftime('%Y')}"),
-                        sanitize_path_component(f"Month {now.strftime('%m.%Y')}"),
-                        sanitize_path_component(f"Day {now.strftime('%m%d%y')}"),
-                        sanitize_path_component(account),
-                    ]
-                    target_dir = Path(self.output_path)
-                    for part in path_parts:
-                        target_dir = target_dir / sanitize_path_component(part)
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    row_data = self.format_row_data(row)
-                    blurb_body, blurb_subject = self.get_blurb_payload(self.combo_blurb.get() if hasattr(self, "combo_blurb") else "(None)")
-                    context = self.build_letter_merge_dict(row_data, blurb_body, blurb_subject)
-                    context["AddressBlock"] = address_block
-                    context["payer_name"] = mapping_row.get("Payer Name", "")
-                    context["payer_fax"] = address_block if method_type == "Fax" else ""
-                    context["payer_attn"] = ""
-                    acronym = self._find_acronym(ugid)
-                    filename_base = sanitize_path_component(f"{self.file_date_str}.{acronym}.{account}")
-                    letter_base = str(target_dir / f"{filename_base} - Letter")
-                    letter_path = self.create_and_save_doc(letter_template, letter_base, context)
-                    if not letter_path:
-                        failures.append((index, "Letter generation error"))
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    if form_flag:
-                        second_base = str(target_dir / f"{filename_base} - Form")
-                        output2 = self.create_and_save_doc(second_template, second_base, context)
+                    day_folder = Path(item['letter_path']).parent.parent
+                except Exception:
+                    day_folder = Path(self.output_path)
+
+                key = (str(day_folder), item.get('method_type', ''))
+                day_method_rows.setdefault(key, []).append(row_entry)
+
+                # Track fax filenames for Ready.txt
+                if item.get('method_type') == 'Fax':
+                    fax_name = ''
+                    if item.get('secondary_path'):
+                        fax_name = Path(item['secondary_path']).name
                     else:
-                        fax_context = dict(context)
-                        fax_context["total_pages"] = max(1, get_docx_page_count(letter_path))
-                        second_base = str(target_dir / f"{filename_base} - Fax")
-                        output2 = self.create_and_save_doc(second_template, second_base, fax_context)
-                    if not output2:
-                        failures.append((index, "Secondary document generation error"))
-                        if os.path.exists(letter_path):
-                            os.remove(letter_path)
-                        self.increment_progress("Generate Appeals")
-                        continue
-                    successes.append({
-                        "index": index,
-                        "letter_path": letter_path,
-                        "method_type": method_type,
-                        "payer_name": mapping_row.get("Payer Name", ""),
-                        "address_block": address_block,
-                        "ugid": ugid,
-                        "workflow_reason": row.get("Workflow_Reason", ""),
-                        "account": account,
-                    })
-                except Exception as row_exc:
-                    failures.append((index, f"Row error: {row_exc}"))
-                finally:
-                    self.increment_progress("Generate Appeals")
-            self.last_successful_items = successes
-            if failures:
-                self.export_failures(failures)
-            if successes:
-                self.extract_notes_from_successes(successes)
-            msg = f"Generation finished. Success: {len(successes)} | Failed: {len(failures)}"
-            self.finalize_progress(msg)
-            messagebox.showinfo("Generation Complete", msg)
-        finally:
-            self.set_buttons_state("normal")
+                        fax_name = Path(item['letter_path']).name.replace(' - Letter', ' - Fax')
+                    fax_ready_files.setdefault(str(day_folder), set()).add(fax_name)
 
-    def export_failures(self, failures):
-        """Write failed rows to a failure workbook with reason column."""
-        if not failures:
-            return
-        failed_indices = [idx for idx, _ in failures]
-        reason_map = {idx: reason for idx, reason in failures}
-        failure_df = self.df.loc[failed_indices].copy()
-        failure_df["Failure Reason"] = [reason_map.get(i, "") for i in failure_df.index]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = Path(self.output_path) / f"Failed_Rows_{timestamp}.xlsx"
-        failure_df.to_excel(out_path, index=False)
-        self.q_print(f"Failure file created: {out_path}")
-
-    def extract_notes_from_successes(self, successes):
-        """Automatically build notes files after generation for successful rows."""
-        grouped = {"Mail": [], "Fax": []}
-        start_text = self.app_config["extract_config"].get("start", DEFAULT_EXTRACT_START)
-        end_text = self.app_config["extract_config"].get("end", DEFAULT_EXTRACT_END)
-        pattern = rf"({re.escape(start_text)}.*?)(?={re.escape(end_text)})" if end_text else rf"({re.escape(start_text)}.*)"
-        for item in successes:
-            try:
-                doc = Document(item["letter_path"])
-                letter_text = "\n".join([para.text for para in doc.paragraphs])
-                match = re.search(pattern, letter_text, re.DOTALL | re.IGNORECASE)
-                extracted_text = normalize_extracted_note_text(match.group(1)) if match else ""
-                if item["method_type"] == "Mail":
-                    heading = f"Appeal letter mailed to {item['payer_name']}, address: {item['address_block']}. Noted as:"
-                    status = "Appeal letter mailed"
-                else:
-                    heading = f"Appeal letter faxed to {item['payer_name']}, fax number: {item['address_block']}. Noted as:"
-                    status = "Appeal letter faxed"
-                grouped[item["method_type"]].append([
-                    item["account"],
-                    f"{heading}\n{extracted_text}\nSaved as: {Path(item['letter_path']).stem}",
-                    item["ugid"],
-                    status,
-                    item["workflow_reason"],
-                    "",
-                ])
             except Exception as exc:
                 self.q_print(f"Note extraction warning for {item.get('account')}: {exc}")
+
+        # Write notes files into each day folder per method
         self.last_notes_file_paths = []
         timestamp = datetime.now().strftime("%m%d%y%H%M%S")
-        for method, rows in grouped.items():
+        for (day_folder_str, method), rows in day_method_rows.items():
             if not rows:
                 continue
-            notes_path = Path(self.output_path) / f"Notes_{method}_{timestamp}.xlsx"
-            df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
-            df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
-            self._add_notes_table(notes_path)
-            self.last_notes_file_paths.append(str(notes_path))
+            notes_path = Path(day_folder_str) / f"Notes{timestamp}.xlsx"
+            try:
+                df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
+                df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
+                self._add_notes_table(notes_path)
+                self.last_notes_file_paths.append(str(notes_path))
+            except Exception as exc:
+                self.q_print(f"Failed to write notes file {notes_path}: {exc}")
+
+        # For faxed letters, create or append a Ready.txt in the day folder listing fax files
+        for day_folder_str, fax_names in fax_ready_files.items():
+            try:
+                ready_path = Path(day_folder_str) / "Ready.txt"
+                # Create a simple Ready marker file only if it doesn't already exist
+                if not ready_path.exists():
+                    try:
+                        ready_path.write_text("Ready\n", encoding='utf-8')
+                    except Exception as exc:
+                        self.q_print(f"Failed to write Ready.txt in {day_folder_str}: {exc}")
+            except Exception as exc:
+                self.q_print(f"Failed to write Ready.txt in {day_folder_str}: {exc}")
+
         if self.last_notes_file_paths and hasattr(self, "btn_send_to_bot"):
             self.btn_send_to_bot.config(state=tk.NORMAL)
 
@@ -2672,16 +3240,185 @@ class MergeApp(tk.Tk):
         messagebox.showinfo("Info", "Use 'Generate Appeals' on the Main tab.")
     def run_fax_merge_pipeline(self):
         return
-    def start_clean_report_thread(self):
-        """Validates path and starts the report cleaning thread."""
-        self.detail_report_path = self.entry_detail_report.get()
-        if not self.detail_report_path or not os.path.exists(self.detail_report_path):
-            messagebox.showerror("Error", "Please select a valid Detail Report file first.")
+
+    def run_generate_appeals(self):
+        """Generate appeals grouped by Claim User Group and Contract Code."""
+
+        failures = []
+        successes = []
+        try:
+            row_groups = self.get_generation_row_groups()
+            total_rows = sum(len(group_rows) for _, group_rows in row_groups)
+            self.reset_progress(total_rows, "Generate Appeals")
+
+            for (ugid, contract_code), group_rows in row_groups:
+                group_error = None
+                if not ugid or not contract_code:
+                    group_error = "Mapping not found"
+                else:
+                    mapping_row = self._lookup_mapping_row(ugid, contract_code)
+                    if not mapping_row:
+                        group_error = "Mapping not found"
+                    else:
+                        method_type, method_contact, method_err = self._parse_selected_method(mapping_row)
+                        if method_err:
+                            group_error = method_err
+                        else:
+                            form_flag = str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
+                            letter_template, second_template, template_err = self._resolve_required_templates(ugid, contract_code, form_flag)
+                            if template_err:
+                                group_error = template_err
+                            else:
+                                mailing_folder = self._find_mailing_folder(ugid)
+                                if method_type == "Mail" and not mailing_folder:
+                                    group_error = "Missing Mailing Folder for Claim User Group"
+
+                if group_error:
+                    for index, _ in group_rows:
+                        failures.append((index, group_error))
+                        self.increment_progress("Generate Appeals")
+                    continue
+
+                payer_name = clean_text_value(mapping_row.get("Payer Name", ""))
+                payer_attn = clean_text_value(mapping_row.get("Attention To", ""))
+                address_block = build_contact_address_block(
+                    payer_name, payer_attn, method_type, method_contact
+                )
+                route_folder = "Faxed Letters" if method_type == "Fax" else "Mailed Letters"
+                acronym = self._find_acronym(ugid)
+
+                for index, row in group_rows:
+                    try:
+                        account = sanitize_path_component(row.get(self.account_col_name, ""))
+                        contract_name = sanitize_path_component(row.get(self.contract_name_col, ""))
+                        now = datetime.now()
+                        path_parts = [
+                            sanitize_path_component(ugid),
+                            route_folder,
+                            sanitize_path_component(f"{contract_code} - {contract_name}"),
+                            sanitize_path_component(f"{now.strftime('%Y')}"),
+                            sanitize_path_component(f"{now.strftime('%m.%Y')}"),
+                            sanitize_path_component(f"{now.strftime('%m%d%y')}"),
+                            sanitize_path_component(account),
+                        ]
+
+                        contract_dir = (
+                            Path(self.output_path)
+                            / sanitize_path_component(ugid)
+                            / route_folder
+                            / sanitize_path_component(f"{contract_code} - {contract_name}")
+                        )
+                        try:
+                            contract_dir.mkdir(parents=True, exist_ok=True)
+                            if method_type == "Fax" and method_contact:
+                                fax_file = contract_dir / "Fax Number.txt"
+                                try:
+                                    if fax_file.exists():
+                                        existing = fax_file.read_text(encoding="utf-8").strip()
+                                        if existing != method_contact:
+                                            fax_file.write_text(method_contact + "\n", encoding="utf-8")
+                                    else:
+                                        fax_file.write_text(method_contact + "\n", encoding="utf-8")
+                                except Exception as exc:
+                                    self.q_print(f"Failed to write Fax Number.txt in {contract_dir}: {exc}")
+                        except Exception:
+                            pass
+
+                        target_dir = Path(self.output_path)
+                        for part in path_parts:
+                            target_dir = target_dir / sanitize_path_component(part)
+                        target_dir.mkdir(parents=True, exist_ok=True)
+
+                        row_data = self.format_row_data(row)
+                        blurb_body, blurb_subject, blurb_err = self.get_row_blurb_payload(row)
+                        if blurb_err:
+                            failures.append((index, blurb_err))
+                            self.increment_progress("Generate Appeals")
+                            continue
+
+                        context = self.build_letter_merge_dict(row_data, blurb_body, blurb_subject)
+                        context["AddressBlock"] = address_block
+                        context["payer_name"] = payer_name
+                        context["payer_fax"] = method_contact if method_type == "Fax" else ""
+                        context["payer_attn"] = payer_attn
+
+                        filename_base = sanitize_path_component(f"{self.file_date_str}.{acronym}.{account}")
+                        letter_base = str(target_dir / f"{filename_base} - Letter")
+                        letter_path = self.create_and_save_doc(letter_template, letter_base, context)
+                        if not letter_path:
+                            failures.append((index, "Letter generation error"))
+                            self.increment_progress("Generate Appeals")
+                            continue
+
+                        if form_flag:
+                            second_base = str(target_dir / f"{filename_base} - Form")
+                            output2 = self.create_and_save_doc(second_template, second_base, context)
+                        else:
+                            fax_context = dict(context)
+                            fax_context["total_pages"] = max(1, get_docx_page_count(letter_path))
+                            second_base = str(target_dir / f"{filename_base} - Fax")
+                            output2 = self.create_and_save_doc(second_template, second_base, fax_context)
+
+                        if not output2:
+                            failures.append((index, "Secondary document generation error"))
+                            self.cleanup_failed_output(target_dir, [letter_path])
+                            self.increment_progress("Generate Appeals")
+                            continue
+
+                        successes.append({
+                            "index": index,
+                            "letter_path": letter_path,
+                            "secondary_path": output2,
+                            "generated_paths": [letter_path, output2],
+                            "method_type": method_type,
+                            "payer_name": payer_name,
+                            "payer_fax": method_contact if method_type == "Fax" else "",
+                            "payer_attn": payer_attn,
+                            "address_block": address_block,
+                            "mailing_folder": mailing_folder,
+                            "ugid": ugid,
+                            "workflow_reason": row.get("Workflow_Reason", ""),
+                            "account": account,
+                        })
+                    except Exception as row_exc:
+                        failures.append((index, f"Row error: {row_exc}"))
+                    finally:
+                        self.increment_progress("Generate Appeals")
+
+            self.last_successful_items = successes
+            if successes:
+                failures.extend(self.copy_mail_outputs_to_mailing_folders(successes))
+            if failures:
+                self.export_failures(failures)
+            if successes:
+                self.extract_notes_from_successes(successes)
+            msg = f"Generation finished. Success: {len(successes)} | Failed: {len(failures)}"
+            self.finalize_progress(msg)
+            if failures:
+                messagebox.showwarning(
+                    "Generation Completed With Failures",
+                    f"{msg}\n\nA failed accounts workbook was exported to your Downloads folder.",
+                )
+            else:
+                messagebox.showinfo("Generation Complete", msg)
+        finally:
+            self.set_buttons_state("normal")
+
+    def export_failures(self, failures):
+        """Write failed rows to Downloads with original columns plus reason."""
+
+        if not failures:
             return
-        self.set_buttons_state("disabled")
-        self.q_print("Starting detail report cleanup...")
-        threading.Thread(target=self.run_clean_report, daemon=True).start()
-    # --- END DETAIL REPORT CLEANER ---
+        failed_indices = [idx for idx, _ in failures]
+        reason_map = {idx: reason for idx, reason in failures}
+        failure_df = self.df.loc[failed_indices].copy()
+        failure_df["Failure Reason"] = [reason_map.get(i, "") for i in failure_df.index]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        downloads_path = Path.home() / "Downloads"
+        downloads_path.mkdir(parents=True, exist_ok=True)
+        out_path = downloads_path / f"Failed_Rows_{timestamp}.xlsx"
+        failure_df.to_excel(out_path, index=False)
+        self.q_print(f"Failure file created: {out_path}")
     # --- NOTE EXTRACTION V2 (New functions) ---
     def start_send_to_bot_thread(self):
         """Confirms and starts the thread to copy the notes file to the network."""
@@ -2698,299 +3435,7 @@ class MergeApp(tk.Tk):
             self.set_buttons_state("disabled")
             self.q_print("Sending notes files to bot...")
             threading.Thread(target=self.run_send_to_bot, daemon=True).start()
-    def run_send_to_bot(self):
-        """Copies all generated notes files to the configured network path."""
-        try:
-            valid_files = [p for p in self.last_notes_file_paths if os.path.exists(p)]
-            if not valid_files:
-                raise Exception("No valid notes files found to send.")
-            if not os.path.exists(self.bot_network_path):
-                raise Exception(f"Network path not found or is inaccessible:\n{self.bot_network_path}")
-            for src in valid_files:
-                dest_file = os.path.join(self.bot_network_path, os.path.basename(src))
-                shutil.copy2(src, dest_file)
-            self.q_print(f"{len(valid_files)} file(s) successfully sent to bot.")
-            messagebox.showinfo("Success", f"{len(valid_files)} notes file(s) copied to:\n{self.bot_network_path}")
-        except Exception as e:
-            self.q_print(f"Error sending file to bot: {e}")
-            messagebox.showerror("Send to Bot Failed", f"An error occurred:\n{e}")
-        finally:
-            self.set_buttons_state("normal")
     # --- END NOTE EXTRACTION V2 ---
-    # --- CLD SPLITTER ---
-    def get_page_breaks(self, file_name: str) -> list:
-        """Find pages containing 'total reimbursement'."""
-        doc = fitz.open(file_name)
-        page_breaks = []
-        for i in range(len(doc)):
-            page = doc[i]
-            text = page.get_text()
-            if "total reimbursement" in text.lower():
-                page_breaks.append(i)
-        doc.close()
-        return page_breaks
-    def run_clean_report(self):
-        """Runs the provided pandas script to clean the detail report."""
-        file_path = self.detail_report_path
-        try:
-            timestamp = dt.datetime.now().strftime("%d%m%Y_%H%M%S")
-            self.q_print(f"Reading file: {os.path.basename(file_path)}...")
-            data = pd.read_excel(
-                file_path,
-                skiprows=7,
-                skipfooter=2,
-                dtype={
-                    "Client": str,
-                    "Reference 1": str,
-                    "Contract Code": str,
-                    "Contract Name": str,
-                    "Provider First Name": str,
-                    "Provider Last Name": str,
-                    "Provider TIN": str,
-                    "Payor's Member ID": str,
-                    "Patient First Name": str,
-                    "Patient Last Name": str,
-                    "Patient DOB": "datetime64[ns]",
-                    "From Date": "datetime64[ns]",
-                    "To Date": "datetime64[ns]",
-                    "POS": str,
-                    "CPT Code": str,
-                    "Mod": str,
-                    "Unit": int,
-                    "Charge": "float64",
-                    "Expected": "float64",
-                    "Allowed": "float64",
-                    "Variance": "float64",
-                    "NPI": str,
-                    "Line Item ICNs": str,
-                },
-            )
-            self.q_print("Processing data...")
-            data["From Date"] = pd.to_datetime(data["From Date"])
-            data["To Date"] = pd.to_datetime(data["To Date"])
-            def calc_DOS_range(dates):
-                start_date = dates.min().strftime("%m/%d/%Y")
-                end_date = dates.max().strftime("%m/%d/%Y")
-                if start_date == end_date:
-                    return start_date
-                else:
-                    return f"{start_date} - {end_date}"
-            date_ranges = data.groupby("Reference 1").agg(
-                {"From Date": lambda x: x.min(), "To Date": lambda x: x.max()}
-            )
-            date_ranges["DOS"] = date_ranges.apply(calc_DOS_range, axis=1)
-            date_ranges = date_ranges.drop(["From Date", "To Date"], axis=1).reset_index()
-            data = pd.merge(data, date_ranges, on="Reference 1")
-            data = data[
-                ~(
-                    (data["Allowed"].isna())
-                    | (data["Expected"].isna())
-                    | (data["Expected"] == 0)
-                    | (data["Variance"].isna())
-                    | (data["Variance"] <= 0)
-                )
-            ]
-            data["Mod"] = data["Mod"].apply(
-                lambda x: x.replace(" ", ", ") if isinstance(x, str) else x
-            )
-            data["CPT Code"] = data.apply(
-                lambda row: (
-                    f"{row['CPT Code']} ({row['Mod']})"
-                    if pd.notna(row["Mod"])
-                    else row["CPT Code"]
-                ),
-                axis=1,
-            )
-            data["CPT_Count"] = data.groupby("Reference 1")["Reference 1"].transform("count")
-            data["Procedure Count"] = data["CPT_Count"].apply(
-                lambda x: "False" if x == 1 else "True"
-            )
-            data["Patient Name"] = (
-                data["Patient First Name"]
-                .str.cat(data["Patient Last Name"], sep=" ")
-                .str.title()
-            )
-            data["Patient First Name"] = data["Patient First Name"].str.title()
-            data["Patient Last Name"] = data["Patient Last Name"].str.title()
-            credentials = set(
-                [
-                    "ACM", "ACSW", "AGAF", "ANP", "ANP-BC", "APNP", "APRN", "BA", "BAN",
-                    "BCNSP", "BCPS", "BHSc", "BPharm", "BS", "BSN", "BSPS", "BScPT",
-                    "BSN-RN", "RN-BSN", "BSPharm", "BSW", "CCC-SLP", "CCNS", "CCRN",
-                    "CCTSW", "CD", "CDCES", "CDE", "CEN", "CHES", "CHPN", "CLE",
-                    "CMSRN", "CNE", "CNM", "CNS", "CNSC", "COCN", "COS-C", "CPH",
-                    "CPHON", "CPhT", "CPN", "CPNP", "CPNP-AC", "CPNP-PC", "CRNI",
-                    "CRNP", "CRT", "CSG", "CSO", "CSP", "CSPT", "CVAA(c)", "CWCMS",
-                    "CWCN", "CWOCN", "CWON", "CWS", "DCSW", "DNP", "DO", "FAAHPM",
-                    "FAAN", "FACG", "FACHE", "FACHP", "FACS", "FACP", "FACN", "FADA",
-                    "FAND", "FASHP", "FASPEN", "FCCP", "FNP", "FNP-BC", "FPPAG",
-                    "FRACP (AUST)", "FRCS Med", "HHCNS", "IBCLC", "IgCN", "IgCP", "LBSW",
-                    "LCPC", "LCSW", "LCSW-BACS", "LCSW-C", "LD", "LDN", "LICSW", "LMNT",
-                    "LPN", "LSW", "MA", "MB", "MBA", "MBBS", "MD", "MED", "MHA", "MHCM",
-                    "MN", "MNSc", "MPH", "MS", "MSc", "MSA", "MScPT", "MSHI", "MSHS",
-                    "MSN", "MSPH", "MSW", "NE-BC", "NP", "OCN", "ONN-CG", "OSW-C",
-                    "PA", "PA-C", "PCCN", "PCNS-BC", "PharmD", "PhD", "PHN", "PNP-AC",
-                    "PNP-BC", "PNP-PC", "RCP", "RD", "RD-AP", "RD/LD", "RDN", "RDN-AP",
-                    "RN", "RNIII", "RNP", "RPh", "RPT", "SLP", "SW", "VA-BC", "WCC",
-                    "WOCN",
-                ]
-            )
-            def clean_first_name(name):
-                if isinstance(name, str):
-                    name = name.replace(".", "")
-                    name = name.rstrip("-")
-                    return name.title()
-                else:
-                    return ""
-            def clean_last_name(name):
-                name = name.replace("-", "").replace(".", "")
-                parts = name.split()
-                last_name_parts = []
-                credential = ""
-                for part in parts:
-                    if part.upper() in credentials:
-                        credential = part.upper()
-                    else:
-                        last_name_parts.append(part)
-                last_name = " ".join(last_name_parts).title()
-                if credential:
-                    last_name = f"{last_name} {credential}"
-                return last_name
-            def remove_credentials_from_last_name(last_name):
-                name = last_name.replace("-", "").replace(".", "")
-                parts = name.split()
-                last_name_parts = []
-                for part in parts:
-                    if part.upper() not in credentials:
-                        last_name_parts.append(part)
-                cleaned_last_name = " ".join(last_name_parts).title()
-                return cleaned_last_name
-            data["Provider First Name"] = data["Provider First Name"].apply(clean_first_name)
-            data["Provider Last Name"] = data["Provider Last Name"].apply(clean_last_name)
-            data["Provider Name"] = data["Provider First Name"].str.cat(
-                data["Provider Last Name"], sep=" "
-            )
-            data["Provider Name"] = data["Provider Name"].str.strip()
-            data["Provider Last Name"] = data["Provider Last Name"].apply(
-                remove_credentials_from_last_name
-            )
-            data["CPT_Code_Count"] = data.groupby(["Reference 1", "CPT Code", "Expected"])[
-                "CPT Code"
-            ].transform("count")
-            def create_procedure_text(row):
-                claim_dates = "days" if "-" in row["DOS"] else "lines billed"
-                if row["CPT_Code_Count"] > 1:
-                    return f"Procedure Code {row['CPT Code']}, contracted rate is ${row['Expected']:.2f} x {int(row['CPT_Code_Count'])} {claim_dates} = ${row['Expected'] * row['CPT_Code_Count']:.2f}"
-                else:
-                    return f"Procedure Code {row['CPT Code']}, contracted rate is ${row['Expected']:.2f}"
-            data["Procedure Text"] = data.apply(create_procedure_text, axis=1)
-            def handle_Duplicate_ICNs(values):
-                non_nan_values = [val for val in values if pd.notna(val)]
-                unique_values = set(non_nan_values)
-                concatenated_values = ", ".join(str(v) for v in unique_values)
-                return concatenated_values
-            self.q_print("Aggregating data...")
-            aggregated_data = (
-                data.groupby(["Reference 1"])
-                .agg(
-                    {
-                        "Units": lambda x: "\n".join(str(val) for val in x),
-                        "CPT Code": lambda x: ", ".join(str(val) for val in x),
-                        "Expected": "sum",
-                        "Allowed": "sum",
-                        "Variance": "sum",
-                        "Procedure Text": lambda x: "\n".join(str(val) for val in set(x)),
-                        "Line Item ICNs": handle_Duplicate_ICNs,
-                        "Contract Code": "first",
-                        "Contract Name": "first",
-                        "Provider Name": "first",
-                        "Provider First Name": "first",
-                        "Provider Last Name": "first",
-                        "NPI": "first",
-                        "Provider TIN": "first",
-                        "Payor's Member ID": "first",
-                        "Patient Name": "first",
-                        "Patient First Name": "first",
-                        "Patient Last Name": "first",
-                        "Patient DOB": "first",
-                        "From Date": "first",
-                        "DOS": "first",
-                        "POS": "first",
-                        "Procedure Count": "first",
-                        "Client": "first",
-                    }
-                )
-                .reset_index()
-            )
-            # Initialize optional metadata columns expected by downstream workflows
-            aggregated_data["Percentage"] = ""
-            aggregated_data["RBRVS Year"] = ""
-            aggregated_data["Provider Specialty"] = ""
-            aggregated_data["Contract Effective Date"] = ""
-            # Ensure the cleaned report columns follow the standard export order
-            column_order = [
-                "Client", "Reference 1", "Contract Code", "Contract Name",
-                "Contract Effective Date", "RBRVS Year", "Percentage",
-                "Provider Name", "Provider First Name", "Provider Last Name", "NPI",
-                "Provider TIN", "Provider Specialty", "Payor's Member ID",
-                "Patient Name", "Patient First Name", "Patient Last Name",
-                "Patient DOB", "From Date", "DOS", "POS", "Procedure Count",
-                "Units", "CPT Code", "Expected", "Allowed", "Variance",
-                "Procedure Text", "Line Item ICNs",
-            ]
-            aggregated_data = aggregated_data.reindex(columns=column_order)
-            aggregated_data.rename(
-                columns={
-                    "CPT Code": "CPT Code List",
-                    "Variance": "Total Variance",
-                    "Expected": "Total Expected",
-                    "Allowed": "Total Allowed",
-                },
-                inplace=True,
-            )
-            aggregated_data["Total Expected"] = aggregated_data["Total Expected"].map(
-                "${:,.2f}".format
-            )
-            aggregated_data["Total Allowed"] = aggregated_data["Total Allowed"].map(
-                "${:,.2f}".format
-            )
-            aggregated_data["Total Variance"] = aggregated_data["Total Variance"].map(
-                "${:,.2f}".format
-            )
-            aggregated_data["Payor's Member ID"] = aggregated_data["Payor's Member ID"].astype(
-                "str"
-            )
-            aggregated_data.columns = [
-                col.replace(" ", "_").replace("'", "") for col in aggregated_data.columns
-            ]
-            aggregated_data["Patient_DOB"] = aggregated_data["Patient_DOB"].dt.strftime(
-                "%m/%d/%Y"
-            )
-            aggregated_data["From_Date"] = aggregated_data["From_Date"].dt.strftime("%m/%d/%Y")
-            # --- FIXED PATH ---
-            downloads_folder = os.path.join(os.environ["USERPROFILE"], "Downloads")
-            report_filename = f"ClaimsForReview_{timestamp}.xlsx"
-            report_path = os.path.join(downloads_folder, report_filename)
-            # --- END FIXED PATH ---
-            self.q_print(f"Saving cleaned report to {report_path}...")
-            aggregated_data.to_excel(report_path, index=False)
-            messagebox.showinfo(
-                "Report Cleaned",
-                (
-                    f"Cleaned report saved to:\n{report_path}\n\n"
-                    "The Excel File field has been updated automatically."
-                ),
-            )
-            self.after(0, lambda: self.load_excel(report_path))
-            self.q_print("Report cleaning complete.")
-        except Exception as e:
-            self.q_print(f"Error cleaning report: {e}")
-            messagebox.showerror("Cleaning Failed", f"An error occurred:\n{e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.set_buttons_state("normal")
-    # --- END DETAIL REPORT CLEANER ---
     # --- Main Process Functions ---
     def format_row_data(self, row):
         """Wrap dataframe values for templating while preserving native types."""
@@ -3075,4 +3520,4 @@ if __name__ == "__main__":
             pass
         with open(CRASH_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"\n--- {datetime.now()} ---\n")
-            f.write(traceback.format_exc())
+            f.write(traceback.format_exc()) 
