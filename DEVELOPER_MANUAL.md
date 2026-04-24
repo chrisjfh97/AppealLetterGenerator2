@@ -173,7 +173,7 @@ Important config keys:
   - `form`
 - `column_formats`: per-Excel-column formatting rules.
 - `blurbs`: reusable letter blurbs and subjects.
-- `auto_detect_blurb`: whether rows use the `BlurbName` Excel column.
+- `auto_detect_blurb`: whether rows use the `RationalName` Excel column.
 - `selected_blurb`: manual dropdown selection when auto-detect is off.
 - `fax_info`: sender info. This is forced to `DEFAULT_FAX_INFO`.
 - `special_cols`: user-selected report columns:
@@ -181,6 +181,8 @@ Important config keys:
   - `claim_user_group_col`
   - `contract_code_col`
   - `contract_name_col`
+  - `dos_col`
+- `special_col_profiles`: saved required-column mappings by workbook column layout.
 - `extract_config`: CM note extraction start/end markers.
 - `mapping_rows`: method routing table.
 - `acronym_rows`: Claim User Group acronym and mailing-folder table.
@@ -208,7 +210,7 @@ Approximate config shape:
     "Column Name": "Text"
   },
   "blurbs": {
-    "BlurbName": {
+    "RationalName": {
       "subject": "Subject text",
       "body": "Body with {{ placeholders }}"
     }
@@ -219,7 +221,17 @@ Approximate config shape:
     "account_col": "Account Number",
     "claim_user_group_col": "Claim User Group",
     "contract_code_col": "Contract Code",
-    "contract_name_col": "Contract Name"
+    "contract_name_col": "Contract Name",
+    "dos_col": "DOS"
+  },
+  "special_col_profiles": {
+    "account_number|claim_user_group|contract_code|contract_name|dos": {
+      "account_col": "Account Number",
+      "claim_user_group_col": "Claim User Group",
+      "contract_code_col": "Contract Code",
+      "contract_name_col": "Contract Name",
+      "dos_col": "DOS"
+    }
   },
   "mapping_rows": [],
   "acronym_rows": []
@@ -235,8 +247,8 @@ Tabs are created in `create_widgets()`:
 - Main
 - CM Note Extraction
 - Column Configuration
-- Mapping Table
-- Blurb Editor
+- Client Mapping
+- Rationale Editor
 - Templates
 
 ### Main Tab
@@ -247,16 +259,16 @@ Purpose:
 
 - Select Excel report.
 - Select output folder.
-- Select/manual configure blurb behavior.
+- Select/manual configure rationale behavior.
 - Set letter/file dates.
 - Start appeal generation.
 
-Blurb behavior:
+Rationale behavior:
 
-- Checkbox: `Auto-detect blurb from BlurbName Column`
+- Checkbox: `Auto-detect rationale from RationalName Column`
 - Default: enabled
-- If enabled, each row must have `BlurbName` matching a saved blurb.
-- If disabled, `combo_blurb` is enabled and one blurb is used for all rows.
+- If enabled, each row must have `RationalName` matching a saved rationale.
+- If disabled, `combo_blurb` is enabled and one rationale is used for all rows.
 
 ### Column Configuration Tab
 
@@ -269,7 +281,7 @@ Purpose:
 
 Column format controls are rendered by `_render_column_format_controls()` in a responsive multi-column grid.
 
-### Mapping Table Tab
+### Client Mapping Tab
 
 Created by `create_mapping_table_tab()`.
 
@@ -313,13 +325,13 @@ The Add/Edit UI is `_open_acronym_row_form()`.
 
 `Mailing Folder` is used only for Mail outputs. Generated Mail files are copied there after a successful run.
 
-### Blurb Editor
+### Rationale Editor
 
 Created by `create_blurb_editor_tab()`.
 
-Blurbs are stored in `self.app_config["blurbs"]`.
+Rationales are stored in `self.app_config["blurbs"]`.
 
-Each blurb can have:
+Each rationale can have:
 
 - name
 - subject
@@ -384,7 +396,7 @@ Relevant helpers:
 3. For Fax: `Fax: <number>`
 4. For Mail: multi-line mailing address/contact text
 
-Mail contacts preserve line breaks from the mapping table.
+Mail contacts preserve line breaks from the Client Mapping.
 
 Fax cover sheets also receive:
 
@@ -417,10 +429,11 @@ run_generate_appeals()
 - Claim User Group column selected
 - Contract Code column selected
 - Contract Name column selected
+- DOS column selected
 - Excel data loaded
 - Required selected columns exist in the loaded DataFrame
 - `Workflow_Reason` exists
-- If auto-detect blurb is enabled, `BlurbName` exists
+- If auto-detect rationale is enabled, `RationalName` exists
 
 ## Grouped Generation
 
@@ -450,7 +463,7 @@ If a group-level requirement fails, every row in that group is marked failed wit
 
 Per-row checks still happen inside the group, including:
 
-- row-specific `BlurbName`
+- row-specific `RationalName`
 - letter render success
 - form/fax render success
 
@@ -516,8 +529,8 @@ Examples:
 - `Letter template missing`
 - `Fax template missing`
 - `Form template missing`
-- `Missing BlurbName column`
-- `BlurbName '<name>' does not match an existing blurb`
+- `Missing RationalName column`
+- `RationalName '<name>' does not match an existing rationale`
 - `Secondary document generation error`
 - `Missing Mailing Folder for Claim User Group`
 
@@ -698,8 +711,8 @@ python -m py_compile AppealLetterGenerator.py
 - Mapping Add/Edit opens full form.
 - Acronym Add/Edit opens full form.
 - Templates tab saves expected template names.
-- Auto-detect blurb works with `BlurbName`.
-- Manual blurb dropdown is enabled when auto-detect is off.
+- Auto-detect rationale works with `RationalName`.
+- Manual rationale dropdown is enabled when auto-detect is off.
 
 3. Run a small generation test with:
 
