@@ -528,7 +528,7 @@ class MergeApp(tk.Tk):
         except tk.TclError:
             pass
 
-        base_bg = "#111827"
+        base_bg = "#080C13"
         panel_bg = "#1f2937"
         header_bg = "#0f172a"
         surface_bg = "#182231"
