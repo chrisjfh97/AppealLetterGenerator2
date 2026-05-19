@@ -3,6 +3,7 @@
 import csv
 import datetime as dt
 import glob
+import hashlib
 import io
 import json
 import logging
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import zipfile
@@ -53,6 +55,7 @@ DEFAULT_FAX_INFO = {
     "user_fax": "(888) 437-7288",
 }
 INVALID_PATH_CHARS = re.compile(r'[\\/:*?"<>|]')
+MAX_CONTRACT_FOLDER_NAME_LENGTH = 80
 
 
 def normalize_extracted_note_text(text):
@@ -210,6 +213,30 @@ def sanitize_path_component(value, fallback="Unknown"):
     text = INVALID_PATH_CHARS.sub("_", text).strip()
     text = re.sub(r"\s+", " ", text)
     return text if text else fallback
+
+
+def build_contract_folder_name(contract_code, contract_name):
+    """Build the limited-length contract output folder name."""
+
+    safe_code = sanitize_path_component(contract_code)
+    safe_name = sanitize_path_component(contract_name)
+    folder_name = sanitize_path_component(f"{safe_code} - {safe_name}")
+
+    if len(folder_name) <= MAX_CONTRACT_FOLDER_NAME_LENGTH:
+        return folder_name
+
+    hash_suffix = hashlib.sha1(folder_name.encode("utf-8")).hexdigest()[:8]
+    suffix = f"... {hash_suffix}"
+    prefix = f"{safe_code} - "
+    available_name_length = MAX_CONTRACT_FOLDER_NAME_LENGTH - len(prefix) - len(suffix)
+
+    if available_name_length > 0:
+        truncated_name = safe_name[:available_name_length].rstrip(" .")
+        return f"{prefix}{truncated_name}{suffix}"
+
+    available_base_length = MAX_CONTRACT_FOLDER_NAME_LENGTH - len(suffix)
+    truncated_base = folder_name[:available_base_length].rstrip(" .")
+    return f"{truncated_base}{suffix}"
 
 
 def clean_text_value(value):
@@ -446,6 +473,12 @@ class MergeApp(tk.Tk):
             normalized[key] = {"body": body, "subject": subject}
         self.app_config["blurbs"] = normalized
 
+    @staticmethod
+    def config_name_sort_key(name):
+        """Sort configured names alphabetically without case affecting order."""
+        text = clean_text_value(name)
+        return (text.casefold(), text)
+
     def normalize_template_config(self):
         """Ensure templates are grouped by type and tolerate legacy settings."""
         templates = self.app_config.get("templates")
@@ -459,6 +492,13 @@ class MergeApp(tk.Tk):
         if isinstance(form_templates, dict):
             for name, path in form_templates.items():
                 templates["form"].setdefault(name, path)
+
+        for template_type in ("letter", "fax", "form"):
+            template_map = templates.get(template_type, {})
+            templates[template_type] = {
+                key: template_map[key]
+                for key in sorted(template_map.keys(), key=self.config_name_sort_key)
+            }
 
         self.app_config["templates"] = templates
 
@@ -539,6 +579,8 @@ class MergeApp(tk.Tk):
         accent_active = "#0f9488"
         border = "#334155"
         selected = "#0f766e"
+        missing_contact_bg = "#7f1d1d"
+        missing_contact_text = "#fee2e2"
         self.theme_colors = {
             "base_bg": base_bg,
             "panel_bg": panel_bg,
@@ -551,6 +593,8 @@ class MergeApp(tk.Tk):
             "accent_active": accent_active,
             "border": border,
             "selected": selected,
+            "missing_contact_bg": missing_contact_bg,
+            "missing_contact_text": missing_contact_text,
         }
 
         self.configure(background=base_bg)
@@ -996,12 +1040,21 @@ class MergeApp(tk.Tk):
             "MethodToUse",
             "Form?",
         ]
+        self.mapping_display_columns = self.mapping_columns + ["Form Setup"]
         filter_frame = ttk.Frame(map_frame)
         filter_frame.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 6))
         filter_frame.columnconfigure(1, weight=1)
         filter_frame.columnconfigure(3, weight=1)
+        filter_frame.columnconfigure(5, weight=1)
+        filter_frame.columnconfigure(7, weight=1)
+        filter_frame.columnconfigure(9, weight=1)
         self.mapping_claim_filter_var = tk.StringVar(value="(All)")
         self.mapping_contract_filter_var = tk.StringVar(value="(All)")
+        self.mapping_payer_filter_var = tk.StringVar(value="(All)")
+        self.mapping_method_filter_var = tk.StringVar(value="(All)")
+        self.mapping_form_filter_var = tk.StringVar(value="(All)")
+        self.mapping_form_setup_filter_var = tk.StringVar(value="(All)")
+        self.mapping_search_var = tk.StringVar()
         ttk.Label(filter_frame, text="Claim User Group:").grid(row=0, column=0, sticky=tk.E, padx=(0, 5))
         self.mapping_claim_filter_combo = ttk.Combobox(
             filter_frame,
@@ -1018,20 +1071,68 @@ class MergeApp(tk.Tk):
             values=["(All)"],
         )
         self.mapping_contract_filter_combo.grid(row=0, column=3, sticky=tk.EW, padx=(0, 10))
+        ttk.Label(filter_frame, text="Payer Name:").grid(row=0, column=4, sticky=tk.E, padx=(0, 5))
+        self.mapping_payer_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.mapping_payer_filter_var,
+            state="readonly",
+            values=["(All)"],
+        )
+        self.mapping_payer_filter_combo.grid(row=0, column=5, columnspan=5, sticky=tk.EW)
+        self.mapping_method_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.mapping_method_filter_var,
+            state="readonly",
+            values=["(All)", "Fax", "Mail"],
+            width=12,
+        )
+        ttk.Label(filter_frame, text="Method Type:").grid(row=1, column=0, sticky=tk.E, padx=(0, 5), pady=(5, 0))
+        self.mapping_method_filter_combo.grid(row=1, column=1, sticky=tk.EW, padx=(0, 10), pady=(5, 0))
+        ttk.Label(filter_frame, text="Requires Form:").grid(row=1, column=2, sticky=tk.E, padx=(0, 5), pady=(5, 0))
+        self.mapping_form_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.mapping_form_filter_var,
+            state="readonly",
+            values=["(All)", "Yes", "No"],
+            width=12,
+        )
+        self.mapping_form_filter_combo.grid(row=1, column=3, sticky=tk.EW, padx=(0, 10), pady=(5, 0))
+        ttk.Label(filter_frame, text="Form Setup:").grid(row=1, column=4, sticky=tk.E, padx=(0, 5), pady=(5, 0))
+        self.mapping_form_setup_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.mapping_form_setup_filter_var,
+            state="readonly",
+            values=["(All)", "Needs Setup", "Ready / Not Required"],
+            width=18,
+        )
+        self.mapping_form_setup_filter_combo.grid(row=1, column=5, sticky=tk.EW, padx=(0, 10), pady=(5, 0))
+        ttk.Label(filter_frame, text="Search:").grid(row=1, column=6, sticky=tk.E, padx=(0, 5), pady=(5, 0))
+        self.mapping_search_entry = ttk.Entry(filter_frame, textvariable=self.mapping_search_var)
+        self.mapping_search_entry.grid(row=1, column=7, sticky=tk.EW, padx=(0, 10), pady=(5, 0))
         ttk.Button(filter_frame, text="Clear Filters", command=self.clear_mapping_filters).grid(
-            row=0, column=4, sticky=tk.E
+            row=1, column=8, sticky=tk.EW, padx=(0, 5), pady=(5, 0)
+        )
+        ttk.Button(filter_frame, text="Export Table", command=self.export_mapping_rows).grid(
+            row=1, column=9, sticky=tk.EW, pady=(5, 0)
         )
         self.mapping_claim_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
         self.mapping_contract_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
+        self.mapping_payer_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
+        self.mapping_method_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
+        self.mapping_form_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
+        self.mapping_form_setup_filter_combo.bind("<<ComboboxSelected>>", lambda event: self.refresh_mapping_views())
+        self.mapping_search_entry.bind("<KeyRelease>", lambda event: self.refresh_mapping_views())
         self.mapping_tree = ttk.Treeview(
             map_frame,
-            columns=self.mapping_columns,
+            columns=self.mapping_display_columns,
             show="headings",
             style="Bordered.Treeview",
+            selectmode="extended",
         )
-        for col in self.mapping_columns:
+        for col in self.mapping_display_columns:
             self.mapping_tree.heading(col, text=col)
             self.mapping_tree.column(col, width=150, anchor=tk.W)
+        self.mapping_tree.column("Form Setup", width=110, minwidth=100, anchor=tk.CENTER)
         self.apply_tree_row_borders(self.mapping_tree)
         self.mapping_tree.grid(row=1, column=0, sticky=tk.NSEW)
         map_scroll = ttk.Scrollbar(map_frame, orient=tk.VERTICAL, command=self.mapping_tree.yview)
@@ -1046,8 +1147,9 @@ class MergeApp(tk.Tk):
         ttk.Button(btns, text="Import", command=self.import_mapping_rows).grid(row=0, column=0, sticky=tk.EW, padx=2)
         ttk.Button(btns, text="Add", command=lambda: self.edit_mapping_row()).grid(row=0, column=1, sticky=tk.EW, padx=2)
         ttk.Button(btns, text="Edit", command=lambda: self.edit_mapping_row(edit=True)).grid(row=0, column=2, sticky=tk.EW, padx=2)
-        ttk.Button(btns, text="Remove", command=self.remove_mapping_row).grid(row=0, column=3, sticky=tk.EW, padx=2)
-        self.mapping_tree.bind("<Double-1>", lambda event: self.edit_mapping_row(edit=True))
+        ttk.Button(btns, text="Remove Selected", command=self.remove_mapping_row).grid(row=0, column=3, sticky=tk.EW, padx=2)
+        self.mapping_tree.bind("<ButtonRelease-1>", self.handle_mapping_table_click)
+        self.mapping_tree.bind("<Double-1>", self.handle_mapping_table_double_click)
 
         acr_frame = ttk.LabelFrame(frame, text="Claim User Group Acronyms")
         acr_frame.grid(row=1, column=0, sticky=tk.NSEW)
@@ -1232,6 +1334,8 @@ class MergeApp(tk.Tk):
         list_notebook = ttk.Notebook(list_frame)
         list_notebook.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         self.template_listboxes = {}
+        self.template_listbox_key_maps = {}
+        self.form_duplicate_source_display_map = {}
 
         template_tabs = [
             ("letter", "Letter Templates"),
@@ -1256,7 +1360,7 @@ class MergeApp(tk.Tk):
             )
             self.template_listboxes[template_type] = listbox
             list_notebook.add(tab_frame, text=label)
-            self.populate_listbox(listbox, self.get_template_mapping(template_type))
+            self.populate_template_listbox(template_type)
 
         paned_window.add(list_frame, weight=1)
 
@@ -1345,6 +1449,8 @@ class MergeApp(tk.Tk):
         list_notebook = ttk.Notebook(list_frame)
         list_notebook.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
         self.template_listboxes = {}
+        self.template_listbox_key_maps = {}
+        self.form_duplicate_source_display_map = {}
 
         for template_type, label in (
             ("letter", "Letter Templates"),
@@ -1368,7 +1474,7 @@ class MergeApp(tk.Tk):
             )
             self.template_listboxes[template_type] = listbox
             list_notebook.add(tab_frame, text=label)
-            self.populate_listbox(listbox, self.get_template_mapping(template_type))
+            self.populate_template_listbox(template_type)
 
         paned_window.add(list_frame, weight=1)
 
@@ -1449,10 +1555,24 @@ class MergeApp(tk.Tk):
             style="PanelMuted.TLabel",
         ).grid(row=6, column=1, columnspan=2, sticky=tk.W, pady=(3, 10))
 
+        ttk.Label(editor_frame, text="Duplicate From Existing Form:").grid(
+            row=7, column=0, padx=(0, 8), pady=5, sticky=tk.E
+        )
+        duplicate_source_var = tk.StringVar()
+        duplicate_source_combo = ttk.Combobox(
+            editor_frame,
+            textvariable=duplicate_source_var,
+            state="readonly",
+            values=[],
+        )
+        duplicate_source_combo.grid(row=7, column=1, columnspan=2, sticky=tk.EW, pady=5)
+        self.form_duplicate_source_combo = duplicate_source_combo
+
         def refresh_generated_name(*_):
             template_type = type_combo.get().lower()
             needs_contract = template_type == "form"
             contract_code_entry.configure(state=tk.NORMAL if needs_contract else tk.DISABLED)
+            duplicate_source_combo.configure(state="readonly" if needs_contract else tk.DISABLED)
             generated_name_var.set(
                 self.build_template_filename(
                     template_type,
@@ -1468,9 +1588,10 @@ class MergeApp(tk.Tk):
         refresh_generated_name()
 
         button_frame = ttk.Frame(editor_frame)
-        button_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=10)
+        button_frame.grid(row=8, column=0, columnspan=3, sticky=tk.EW, pady=10)
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
+        button_frame.columnconfigure(3, weight=1)
         ttk.Button(
             button_frame,
             text="New",
@@ -1480,6 +1601,7 @@ class MergeApp(tk.Tk):
                 generated_name_var,
                 entry_path,
                 type_combo,
+                duplicate_source_combo,
             ),
         ).grid(row=0, column=0, padx=2, sticky=tk.W)
         ttk.Button(
@@ -1503,8 +1625,17 @@ class MergeApp(tk.Tk):
                 contract_code_entry,
                 generated_name_var,
                 entry_path,
+                duplicate_source_combo,
             ),
         ).grid(row=0, column=2, padx=2, sticky=tk.EW)
+        ttk.Button(
+            button_frame,
+            text="Batch Duplicate Forms...",
+            command=lambda: self.batch_duplicate_form_templates_from_excel(
+                type_combo.get().lower(),
+                duplicate_source_combo,
+            ),
+        ).grid(row=0, column=3, padx=2, sticky=tk.EW)
         ttk.Button(
             button_frame,
             text="Delete",
@@ -1515,8 +1646,9 @@ class MergeApp(tk.Tk):
                 generated_name_var,
                 entry_path,
                 type_combo,
+                duplicate_source_combo,
             ),
-        ).grid(row=0, column=3, padx=2, sticky=tk.E)
+        ).grid(row=0, column=4, padx=2, sticky=tk.E)
         self.template_editor_fields = (
             claim_group_combo,
             contract_code_entry,
@@ -1524,7 +1656,9 @@ class MergeApp(tk.Tk):
             entry_path,
             type_combo,
             refresh_generated_name,
+            duplicate_source_combo,
         )
+        self.refresh_form_duplicate_source_options()
         paned_window.add(editor_frame, weight=2)
         return frame
     # --- REFACTORED: New tab combining Rationales and Placeholders ---
@@ -1932,6 +2066,20 @@ class MergeApp(tk.Tk):
         tree.tag_configure("oddrow", background=self.theme_colors["field_bg"])
         tree.tag_configure("evenrow", background=self.theme_colors["surface_bg"])
         tree.tag_configure("borderrow", foreground=self.theme_colors["text"])
+        tree.tag_configure(
+            "missingcontact",
+            background=self.theme_colors["missing_contact_bg"],
+            foreground=self.theme_colors["missing_contact_text"],
+        )
+
+    def mapping_selected_method_missing_contact(self, row):
+        """Return True when MethodToUse targets a method with no contact."""
+
+        method_to_use = clean_text_value(row.get("MethodToUse", ""))
+        if method_to_use not in {"1", "2", "3"}:
+            return False
+        contact_field = f"Method {method_to_use} Contact"
+        return not bool(clean_text_value(row.get(contact_field, "")))
 
     def refresh_mapping_filter_options(self, mapping_rows):
         """Refresh Client Mapping filter values from current mapping rows."""
@@ -1952,24 +2100,65 @@ class MergeApp(tk.Tk):
                 if clean_text_value(row.get("Contract Code", ""))
             }
         )
+        payer_values = sorted(
+            {
+                clean_text_value(row.get("Payer Name", ""))
+                for row in mapping_rows
+                if clean_text_value(row.get("Payer Name", ""))
+            }
+        )
         claim_options = ["(All)"] + claim_values
         contract_options = ["(All)"] + contract_values
+        payer_options = ["(All)"] + payer_values
         self.mapping_claim_filter_combo["values"] = claim_options
         self.mapping_contract_filter_combo["values"] = contract_options
+        self.mapping_payer_filter_combo["values"] = payer_options
         if self.mapping_claim_filter_var.get() not in claim_options:
             self.mapping_claim_filter_var.set("(All)")
         if self.mapping_contract_filter_var.get() not in contract_options:
             self.mapping_contract_filter_var.set("(All)")
+        if self.mapping_payer_filter_var.get() not in payer_options:
+            self.mapping_payer_filter_var.set("(All)")
 
     def mapping_row_matches_filters(self, row):
         """Return True when a mapping row passes the active filters."""
 
         claim_filter = self.mapping_claim_filter_var.get() if hasattr(self, "mapping_claim_filter_var") else "(All)"
         contract_filter = self.mapping_contract_filter_var.get() if hasattr(self, "mapping_contract_filter_var") else "(All)"
+        payer_filter = self.mapping_payer_filter_var.get() if hasattr(self, "mapping_payer_filter_var") else "(All)"
+        method_filter = self.mapping_method_filter_var.get() if hasattr(self, "mapping_method_filter_var") else "(All)"
+        form_filter = self.mapping_form_filter_var.get() if hasattr(self, "mapping_form_filter_var") else "(All)"
+        form_setup_filter = (
+            self.mapping_form_setup_filter_var.get()
+            if hasattr(self, "mapping_form_setup_filter_var")
+            else "(All)"
+        )
+        search_text = self.mapping_search_var.get().strip().lower() if hasattr(self, "mapping_search_var") else ""
         if claim_filter != "(All)" and clean_text_value(row.get("Claim User Group", "")) != claim_filter:
             return False
         if contract_filter != "(All)" and clean_text_value(row.get("Contract Code", "")) != contract_filter:
             return False
+        if payer_filter != "(All)" and clean_text_value(row.get("Payer Name", "")) != payer_filter:
+            return False
+        if method_filter != "(All)":
+            method_to_use = clean_text_value(row.get("MethodToUse", ""))
+            selected_type = clean_text_value(row.get(f"Method {method_to_use} Type", ""))
+            if selected_type.lower() != method_filter.lower():
+                return False
+        if form_filter != "(All)":
+            requires_form = "Yes" if self._mapping_requires_form(row) else "No"
+            if requires_form != form_filter:
+                return False
+        if form_setup_filter != "(All)":
+            needs_setup = self.mapping_needs_form_setup(row)
+            if form_setup_filter == "Needs Setup" and not needs_setup:
+                return False
+            if form_setup_filter == "Ready / Not Required" and needs_setup:
+                return False
+        if search_text:
+            searchable = " ".join(clean_text_value(row.get(col, "")) for col in self.mapping_columns).lower()
+            if search_text not in searchable:
+                return False
         return True
 
     def clear_mapping_filters(self):
@@ -1979,7 +2168,132 @@ class MergeApp(tk.Tk):
             self.mapping_claim_filter_var.set("(All)")
         if hasattr(self, "mapping_contract_filter_var"):
             self.mapping_contract_filter_var.set("(All)")
+        if hasattr(self, "mapping_payer_filter_var"):
+            self.mapping_payer_filter_var.set("(All)")
+        if hasattr(self, "mapping_method_filter_var"):
+            self.mapping_method_filter_var.set("(All)")
+        if hasattr(self, "mapping_form_filter_var"):
+            self.mapping_form_filter_var.set("(All)")
+        if hasattr(self, "mapping_form_setup_filter_var"):
+            self.mapping_form_setup_filter_var.set("(All)")
+        if hasattr(self, "mapping_search_var"):
+            self.mapping_search_var.set("")
         self.refresh_mapping_views()
+
+    def find_template_by_expected_filename(self, template_type, target_filename):
+        """Find a managed template by expected filename in config or default folder."""
+        if not target_filename:
+            return ""
+        default_dir = Path(self.get_template_folder_path(template_type))
+        candidate = default_dir / target_filename
+        if candidate.exists():
+            return str(candidate)
+        target_name = target_filename.lower()
+        for path in self.get_template_mapping(template_type).values():
+            if path and Path(path).name.lower() == target_name and os.path.exists(path):
+                return path
+        return ""
+
+    def find_managed_template_by_expected_filename(self, template_type, target_filename):
+        """Find a registered template whose configured file still exists."""
+        if not target_filename:
+            return ""
+        target_name = target_filename.lower()
+        template_map = self.get_template_mapping(template_type)
+        configured_path = template_map.get(target_filename, "")
+        if configured_path and os.path.exists(configured_path):
+            return configured_path
+        for path in template_map.values():
+            if path and Path(path).name.lower() == target_name and os.path.exists(path):
+                return path
+        return ""
+
+    def get_expected_form_template_name_for_mapping(self, row):
+        """Build the expected form template filename for a mapping row."""
+        return self.build_template_filename(
+            "form",
+            row.get("Claim User Group", ""),
+            row.get("Contract Code", ""),
+        )
+
+    def mapping_needs_form_setup(self, row):
+        """Return True when a required form template is not configured yet."""
+        if not self._mapping_requires_form(row):
+            return False
+        expected_name = self.get_expected_form_template_name_for_mapping(row)
+        if not expected_name:
+            return False
+        return not bool(self.find_managed_template_by_expected_filename("form", expected_name))
+
+    def handle_mapping_table_click(self, event):
+        """Open template setup from the UI-only Form Setup table column."""
+        tree = getattr(self, "mapping_tree", None)
+        if not tree:
+            return
+        if tree.identify("region", event.x, event.y) != "cell":
+            return
+        column_id = tree.identify_column(event.x)
+        setup_column = f"#{self.mapping_display_columns.index('Form Setup') + 1}"
+        if column_id != setup_column:
+            return
+        row_id = tree.identify_row(event.y)
+        if not row_id:
+            return
+        visible_idx = tree.index(row_id)
+        if not (0 <= visible_idx < len(getattr(self, "mapping_visible_indexes", []))):
+            return
+        stored_idx = self.mapping_visible_indexes[visible_idx]
+        rows = self.app_config.get("mapping_rows", [])
+        if not (0 <= stored_idx < len(rows)):
+            return
+        row = rows[stored_idx]
+        if self.mapping_needs_form_setup(row):
+            self.open_form_template_setup_from_mapping(row)
+
+    def handle_mapping_table_double_click(self, event):
+        """Edit rows on double-click except when the setup action column was hit."""
+        tree = getattr(self, "mapping_tree", None)
+        if tree and tree.identify("region", event.x, event.y) == "cell":
+            column_id = tree.identify_column(event.x)
+            setup_column = f"#{self.mapping_display_columns.index('Form Setup') + 1}"
+            if column_id == setup_column:
+                return "break"
+        self.edit_mapping_row(edit=True)
+
+    def open_form_template_setup_from_mapping(self, row):
+        """Open Templates with a form target prefilled from a mapping row."""
+        if not hasattr(self, "template_editor_fields"):
+            return
+        (
+            claim_group_combo,
+            contract_code_entry,
+            generated_name_var,
+            entry_path,
+            type_combo,
+            refresh_generated_name,
+            duplicate_source_combo,
+        ) = self.template_editor_fields
+
+        claim_group = clean_text_value(row.get("Claim User Group", ""))
+        contract_code = clean_text_value(row.get("Contract Code", ""))
+        expected_name = self.build_template_filename("form", claim_group, contract_code)
+        existing_path = self.find_template_by_expected_filename("form", expected_name)
+
+        self.notebook.select(self.tab_forms)
+        type_combo.set("Form")
+        claim_group_combo.delete(0, tk.END)
+        claim_group_combo.insert(0, claim_group)
+        contract_code_entry.configure(state=tk.NORMAL)
+        contract_code_entry.delete(0, tk.END)
+        contract_code_entry.insert(0, contract_code)
+        entry_path.delete(0, tk.END)
+        if existing_path:
+            entry_path.insert(0, existing_path)
+        refresh_generated_name()
+        generated_name_var.set(expected_name)
+        self.refresh_form_duplicate_source_options()
+        duplicate_source_combo.focus_set()
+        self.update_status_bar(f"Template setup ready for {expected_name}.")
 
     def ensure_unique_template_name(self, base_name, template_dict):
         """Return a unique template name by adding a counter when needed."""
@@ -2107,7 +2421,7 @@ class MergeApp(tk.Tk):
         self.save_config()
         self.update_status_bar("Note extraction settings saved.")
 
-    def reload_excel_file(self):
+    def reload_excel_file(self, async_load=True):
         """Reload the currently selected Excel file to refresh columns."""
         excel_path = self.entry_excel.get().strip() if hasattr(self, "entry_excel") else ""
         if not excel_path:
@@ -2117,8 +2431,17 @@ class MergeApp(tk.Tk):
                 "Excel Reload Failed",
                 "Please select a valid Excel file on the Main tab first.",
             )
-            return
-        self.load_excel(excel_path)
+            return False
+        if async_load:
+            self.load_excel(excel_path)
+            return True
+
+        self.entry_excel.delete(0, tk.END)
+        self.entry_excel.insert(0, excel_path)
+        self.entry_excel.update_idletasks()
+        self.app_config["excel_path"] = excel_path
+        self.update_status_bar(f"Reloading Excel file: {os.path.basename(excel_path)}...")
+        return self._load_excel_data(excel_path)
 
     def _on_mousewheel(self, event, canvas):
         """Scroll the column configuration canvas with the mouse wheel."""
@@ -2146,8 +2469,98 @@ class MergeApp(tk.Tk):
     def populate_listbox(self, listbox, data_dict):
         """Populate a listbox with the sorted keys of a dictionary."""
         listbox.delete(0, tk.END)
-        for key in sorted(data_dict.keys()):
+        for key in sorted(data_dict.keys(), key=self.config_name_sort_key):
             listbox.insert(tk.END, key)
+
+    def _get_form_template_payer_name(self, template_name):
+        """Return payer info for a form template based on the mapping table."""
+        claim_group, contract_code = self.parse_template_filename("form", template_name)
+        if not claim_group or not contract_code:
+            return ""
+        target_claim = clean_text_value(claim_group).lower()
+        target_contract = clean_text_value(contract_code).lower()
+        for row in self.app_config.get("mapping_rows", []):
+            row_claim = clean_text_value(row.get("Claim User Group", "")).lower()
+            row_contract = clean_text_value(row.get("Contract Code", "")).lower()
+            if row_claim == target_claim and row_contract == target_contract:
+                return clean_text_value(row.get("Payer Name", ""))
+        return ""
+
+    def _format_form_template_display_name(self, template_name):
+        """Add payer context to form template display names without changing keys."""
+        payer_name = self._get_form_template_payer_name(template_name)
+        if payer_name:
+            return f"{template_name} ({payer_name})"
+        return template_name
+
+    def populate_template_listbox(self, template_type):
+        """Populate a template library listbox, preserving actual config keys."""
+        listbox = self.template_listboxes.get(template_type)
+        if not listbox:
+            return
+        template_map = self.get_template_mapping(template_type)
+        display_to_key = {}
+        listbox.delete(0, tk.END)
+        for key in sorted(template_map.keys(), key=self.config_name_sort_key):
+            display_name = (
+                self._format_form_template_display_name(key)
+                if template_type == "form"
+                else key
+            )
+            display_to_key[display_name] = key
+            listbox.insert(tk.END, display_name)
+        self.template_listbox_key_maps[id(listbox)] = display_to_key
+
+    def _get_template_listbox_key(self, listbox, selected_name):
+        """Translate a displayed template label back to its config key."""
+        return self.template_listbox_key_maps.get(id(listbox), {}).get(
+            selected_name, selected_name
+        )
+
+    def select_template_listbox_item(self, template_type, item_name):
+        """Select a template listbox item by config key."""
+        listbox = self.template_listboxes.get(template_type)
+        if not listbox:
+            return
+        display_to_key = self.template_listbox_key_maps.get(id(listbox), {})
+        for index in range(listbox.size()):
+            display_name = listbox.get(index)
+            if display_to_key.get(display_name, display_name) == item_name:
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(index)
+                listbox.see(index)
+                return
+
+    def refresh_form_duplicate_source_options(self):
+        """Refresh the existing-form selector used by Duplicate Form."""
+        combo = getattr(self, "form_duplicate_source_combo", None)
+        if not combo:
+            return
+        current = combo.get()
+        display_map = {}
+        values = []
+        template_items = self.get_template_mapping("form").items()
+        for key, path in sorted(template_items, key=lambda item: self.config_name_sort_key(item[0])):
+            if not path or not os.path.exists(path):
+                continue
+            display_name = self._format_form_template_display_name(key)
+            display_map[display_name] = key
+            values.append(display_name)
+        self.form_duplicate_source_display_map = display_map
+        combo["values"] = values
+        if current not in values:
+            combo.set("")
+
+    def _get_selected_form_duplicate_path(self, source_combo):
+        """Return the filesystem path for the selected duplicate source form."""
+        if not source_combo:
+            return ""
+        selected_display = source_combo.get().strip()
+        selected_key = self.form_duplicate_source_display_map.get(selected_display, selected_display)
+        if not selected_key:
+            return ""
+        return self.get_template_mapping("form").get(selected_key, "")
+
     def load_list_item(self, event, data_dict, entry_name, text_content):
         """Load the selected dictionary entry into the editor widgets."""
         try:
@@ -2277,7 +2690,8 @@ class MergeApp(tk.Tk):
         """Legacy template loader kept for reference during the UI transition."""
         try:
             selected_index = event.widget.curselection()[0]
-            selected_name = event.widget.get(selected_index)
+            selected_display = event.widget.get(selected_index)
+            selected_name = self._get_template_listbox_key(event.widget, selected_display)
         except IndexError:
             return
         if not hasattr(self, "template_editor_fields"):
@@ -2487,11 +2901,31 @@ class MergeApp(tk.Tk):
             )
             return None
 
+    def copy_template_to_expected_filename_no_prompt(self, template_type, template_path, target_filename):
+        """Copy a template into the expected folder, skipping existing targets."""
+        if not template_path or not os.path.exists(template_path):
+            return None, "Source template file was not found"
+
+        default_dir = Path(self.get_template_folder_path(template_type))
+        target_path = default_dir / target_filename
+        source_path = Path(template_path)
+        try:
+            default_dir.mkdir(parents=True, exist_ok=True)
+            if target_path.exists():
+                return str(target_path), "exists"
+            if source_path.resolve() == target_path.resolve():
+                return None, "Source and target are the same file"
+            shutil.copy2(str(source_path), str(target_path))
+            return str(target_path), ""
+        except Exception as exc:
+            return None, str(exc)
+
     def load_template_item(self, event, template_type):
         """Load a template mapping into the editor widgets."""
         try:
             selected_index = event.widget.curselection()[0]
-            selected_name = event.widget.get(selected_index)
+            selected_display = event.widget.get(selected_index)
+            selected_name = self._get_template_listbox_key(event.widget, selected_display)
         except IndexError:
             return
         if not hasattr(self, "template_editor_fields"):
@@ -2505,6 +2939,7 @@ class MergeApp(tk.Tk):
             entry_path,
             type_combo,
             refresh_generated_name,
+            duplicate_source_combo,
         ) = self.template_editor_fields
 
         claim_group, contract_code = self.parse_template_filename(template_type, selected_name)
@@ -2516,6 +2951,7 @@ class MergeApp(tk.Tk):
         contract_code_entry.insert(0, contract_code)
         entry_path.delete(0, tk.END)
         entry_path.insert(0, template_map.get(selected_name, ""))
+        duplicate_source_combo.set("")
         refresh_generated_name()
         if not generated_name_var.get() and selected_name:
             generated_name_var.set(selected_name)
@@ -2554,11 +2990,11 @@ class MergeApp(tk.Tk):
         self.save_config()
         listbox = self.template_listboxes.get(template_type)
         if listbox:
-            self.populate_listbox(listbox, template_map)
-            matching = sorted(template_map.keys()).index(item_name)
-            listbox.selection_clear(0, tk.END)
-            listbox.selection_set(matching)
-            listbox.see(matching)
+            self.populate_template_listbox(template_type)
+            self.select_template_listbox_item(template_type, item_name)
+        if template_type == "form":
+            self.refresh_form_duplicate_source_options()
+            self.refresh_mapping_views()
         self.update_main_combos()
         self.update_status_bar(
             f"{template_type.capitalize()} template '{item_name}' saved."
@@ -2571,6 +3007,7 @@ class MergeApp(tk.Tk):
         contract_code_entry,
         generated_name_var,
         entry_path,
+        source_combo=None,
     ):
         """Duplicate an existing form template under the generated form filename."""
         if template_type != "form":
@@ -2587,7 +3024,9 @@ class MergeApp(tk.Tk):
 
         item_name = self.build_template_filename(template_type, claim_group, contract_code)
         generated_name_var.set(item_name)
-        item_path = entry_path.get().strip()
+        item_path = self._get_selected_form_duplicate_path(source_combo)
+        if not item_path:
+            item_path = entry_path.get().strip()
         copied_path = self.copy_template_to_expected_filename(template_type, item_path, item_name)
         if not copied_path:
             return
@@ -2599,13 +3038,155 @@ class MergeApp(tk.Tk):
         self.save_config()
         listbox = self.template_listboxes.get(template_type)
         if listbox:
-            self.populate_listbox(listbox, template_map)
-            matching = sorted(template_map.keys()).index(item_name)
-            listbox.selection_clear(0, tk.END)
-            listbox.selection_set(matching)
-            listbox.see(matching)
+            self.populate_template_listbox(template_type)
+            self.select_template_listbox_item(template_type, item_name)
+        self.refresh_form_duplicate_source_options()
+        self.refresh_mapping_views()
         self.update_main_combos()
         self.update_status_bar(f"Form template duplicated as '{item_name}'.")
+
+    def batch_duplicate_form_templates_from_excel(self, template_type, source_combo):
+        """Duplicate one existing form template for many imported contracts."""
+        if template_type != "form":
+            messagebox.showerror(
+                "Form Template Required",
+                "Batch Duplicate Forms is only available for Form templates.",
+            )
+            return
+
+        source_path = self._get_selected_form_duplicate_path(source_combo)
+        source_label = source_combo.get().strip() if source_combo else ""
+        if not source_path:
+            messagebox.showerror(
+                "Source Form Needed",
+                "Select an existing form in Duplicate From Existing Form before running a batch duplicate.",
+            )
+            return
+        if not os.path.exists(source_path):
+            messagebox.showerror(
+                "Source Form Missing",
+                f"The selected source form could not be found:\n{source_path}",
+            )
+            return
+
+        filepath = filedialog.askopenfilename(
+            title="Import Contracts for Form Duplication",
+            filetypes=[("Excel Files", "*.xlsx *.xls")],
+            parent=self,
+        )
+        if not filepath:
+            return
+
+        try:
+            df_import = pd.read_excel(filepath)
+        except Exception as exc:
+            messagebox.showerror(
+                "Import Failed",
+                f"Unable to read the Excel file:\n{exc}",
+                parent=self,
+            )
+            return
+
+        trimmed_columns = {str(col).strip(): col for col in df_import.columns}
+        required_columns = ["Claim User Group", "Contract Code"]
+        missing_columns = [col for col in required_columns if col not in trimmed_columns]
+        if missing_columns:
+            messagebox.showerror(
+                "Missing Required Columns",
+                "The Excel file must include columns named: Claim User Group, Contract Code.",
+                parent=self,
+            )
+            return
+
+        rows_to_create = []
+        skipped_invalid = []
+        for excel_index, row in df_import.iterrows():
+            claim_value = row.get(trimmed_columns["Claim User Group"], "")
+            contract_value = row.get(trimmed_columns["Contract Code"], "")
+            claim_group = "" if pd.isna(claim_value) else str(claim_value).strip()
+            contract_code = "" if pd.isna(contract_value) else str(contract_value).strip()
+            row_label = f"Row {excel_index + 2}: {claim_group or '(blank)'} / {contract_code or '(blank)'}"
+
+            if not claim_group or not contract_code:
+                skipped_invalid.append(f"{row_label} - missing value")
+                continue
+            if INVALID_PATH_CHARS.search(claim_group) or INVALID_PATH_CHARS.search(contract_code):
+                skipped_invalid.append(f"{row_label} - invalid filename character")
+                continue
+
+            target_filename = self.build_template_filename("form", claim_group, contract_code)
+            if not target_filename:
+                skipped_invalid.append(f"{row_label} - could not build filename")
+                continue
+            rows_to_create.append((claim_group, contract_code, target_filename, row_label))
+
+        if not rows_to_create:
+            messagebox.showinfo(
+                "No Valid Contracts",
+                "No valid rows were found to duplicate.",
+                parent=self,
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Confirm Batch Duplicate",
+            (
+                f"Duplicate source form:\n{source_label or Path(source_path).name}\n\n"
+                f"Valid rows found: {len(rows_to_create)}\n\n"
+                "Existing target forms will be skipped."
+            ),
+            parent=self,
+        ):
+            return
+
+        template_map = self.get_template_mapping("form")
+        created = []
+        skipped_existing = []
+        failed = []
+
+        for _claim_group, _contract_code, target_filename, row_label in rows_to_create:
+            copied_path, error = self.copy_template_to_expected_filename_no_prompt(
+                "form", source_path, target_filename
+            )
+            if error == "exists":
+                template_map[target_filename] = copied_path
+                skipped_existing.append(f"{row_label} - already exists")
+                continue
+            if error:
+                failed.append(f"{row_label} - {error}")
+                continue
+            template_map[target_filename] = copied_path
+            created.append(target_filename)
+
+        self.save_config()
+        self.populate_template_listbox("form")
+        self.refresh_form_duplicate_source_options()
+        self.refresh_mapping_views()
+        self.update_main_combos()
+
+        summary_lines = [
+            "Batch duplicate complete.",
+            "",
+            f"Created: {len(created)}",
+            f"Skipped existing: {len(skipped_existing)}",
+            f"Skipped invalid/incomplete: {len(skipped_invalid)}",
+            f"Failed copy attempts: {len(failed)}",
+        ]
+        details = skipped_invalid + skipped_existing + failed
+        if details:
+            summary_lines.extend(["", "Details:"])
+            summary_lines.extend(details[:12])
+            if len(details) > 12:
+                summary_lines.append(f"...and {len(details) - 12} more.")
+
+        self.update_status_bar(
+            f"Batch duplicated {len(created)} form template(s); skipped {len(skipped_existing) + len(skipped_invalid)}."
+        )
+        messagebox.showinfo(
+            "Batch Duplicate Complete",
+            "\n".join(summary_lines),
+            parent=self,
+        )
 
     def delete_template_item(
         self,
@@ -2615,6 +3196,7 @@ class MergeApp(tk.Tk):
         generated_name_var,
         entry_path,
         type_combo,
+        duplicate_source_combo=None,
     ):
         """Delete the selected template mapping entry."""
         listbox = self.template_listboxes.get(template_type)
@@ -2622,7 +3204,7 @@ class MergeApp(tk.Tk):
             return
         selected_indices = listbox.curselection()
         selected_name = (
-            listbox.get(selected_indices[0])
+            self._get_template_listbox_key(listbox, listbox.get(selected_indices[0]))
             if selected_indices
             else generated_name_var.get().strip()
         )
@@ -2636,14 +3218,18 @@ class MergeApp(tk.Tk):
             ):
                 del template_map[selected_name]
                 self.save_config()
-                self.populate_listbox(listbox, template_map)
+                self.populate_template_listbox(template_type)
                 self.clear_template_editor(
                     claim_group_combo,
                     contract_code_entry,
                     generated_name_var,
                     entry_path,
                     type_combo,
+                    duplicate_source_combo,
                 )
+                if template_type == "form":
+                    self.refresh_form_duplicate_source_options()
+                    self.refresh_mapping_views()
                 self.update_main_combos()
                 self.update_status_bar(
                     f"{template_type.capitalize()} template '{selected_name}' deleted."
@@ -2656,6 +3242,7 @@ class MergeApp(tk.Tk):
         generated_name_var,
         entry_path,
         type_combo,
+        duplicate_source_combo=None,
     ):
         """Reset the template editor fields to empty values."""
         claim_group_combo.delete(0, tk.END)
@@ -2663,6 +3250,8 @@ class MergeApp(tk.Tk):
         contract_code_entry.delete(0, tk.END)
         entry_path.delete(0, tk.END)
         generated_name_var.set("")
+        if duplicate_source_combo:
+            duplicate_source_combo.set("")
         if type_combo.get().lower() != "form":
             contract_code_entry.configure(state=tk.DISABLED)
     def _open_mapping_row_form(self, initial=None):
@@ -2864,16 +3453,28 @@ class MergeApp(tk.Tk):
             self.refresh_mapping_filter_options(mapping_rows)
             self.mapping_visible_indexes = []
             visible_rows = []
+            display_rows = []
             for stored_index, row in enumerate(mapping_rows):
                 if not self.mapping_row_matches_filters(row):
                     continue
                 row_index = len(visible_rows)
                 visible_rows.append(row)
                 self.mapping_visible_indexes.append(stored_index)
-                values = [row.get(col, "") for col in self.mapping_columns]
+                display_row = {
+                    col: row.get(col, "") for col in self.mapping_columns
+                }
+                display_row["Form Setup"] = (
+                    "Setup Form" if self.mapping_needs_form_setup(row) else ""
+                )
+                display_rows.append(display_row)
+                values = [display_row.get(col, "") for col in self.mapping_display_columns]
                 tag = "evenrow" if row_index % 2 else "oddrow"
-                self.mapping_tree.insert("", tk.END, values=values, tags=(tag, "borderrow"))
-            self.autosize_tree_columns(self.mapping_tree, self.mapping_columns, visible_rows)
+                if self.mapping_selected_method_missing_contact(row):
+                    tags = ("missingcontact",)
+                else:
+                    tags = (tag, "borderrow")
+                self.mapping_tree.insert("", tk.END, values=values, tags=tags)
+            self.autosize_tree_columns(self.mapping_tree, self.mapping_display_columns, display_rows)
         if hasattr(self, "acronym_tree"):
             for item in self.acronym_tree.get_children():
                 self.acronym_tree.delete(item)
@@ -2884,6 +3485,9 @@ class MergeApp(tk.Tk):
                 self.acronym_tree.insert("", tk.END, values=values, tags=(tag, "borderrow"))
             self.autosize_tree_columns(self.acronym_tree, self.acronym_columns, acronym_rows)
         self.refresh_template_claim_group_options()
+        if hasattr(self, "template_listboxes") and "form" in self.template_listboxes:
+            self.populate_template_listbox("form")
+            self.refresh_form_duplicate_source_options()
 
     def _prompt_for_values(self, title, columns, initial=None):
         values = {}
@@ -2917,6 +3521,47 @@ class MergeApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Import Failed", f"Unable to import mapping data:\n{exc}")
 
+    def export_mapping_rows(self):
+        """Export the currently visible method mapping table to CSV or Excel."""
+
+        mapping_rows = self.app_config.get("mapping_rows", [])
+        visible_indexes = getattr(self, "mapping_visible_indexes", [])
+        export_rows = [
+            {col: mapping_rows[index].get(col, "") for col in self.mapping_columns}
+            for index in visible_indexes
+            if 0 <= index < len(mapping_rows)
+        ]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = filedialog.asksaveasfilename(
+            title="Export Method Mapping",
+            defaultextension=".xlsx",
+            initialfile=f"method_mapping_{timestamp}.xlsx",
+            filetypes=[("Excel Workbook", "*.xlsx"), ("CSV File", "*.csv")],
+            parent=self,
+        )
+        if not filepath:
+            return
+
+        try:
+            export_path = Path(filepath)
+            if not export_path.suffix:
+                export_path = export_path.with_suffix(".xlsx")
+            df_map = pd.DataFrame(export_rows, columns=self.mapping_columns)
+            if export_path.suffix.lower() == ".csv":
+                df_map.to_csv(export_path, index=False, encoding="utf-8-sig")
+            else:
+                df_map.to_excel(export_path, index=False)
+            self.update_status_bar(
+                f"Exported {len(export_rows)} method mapping row(s) to {export_path}."
+            )
+            messagebox.showinfo(
+                "Export Complete",
+                f"Exported {len(export_rows)} visible method mapping row(s).",
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror("Export Failed", f"Unable to export mapping data:\n{exc}", parent=self)
+
     def edit_mapping_row(self, edit=False):
         rows = self.app_config.get("mapping_rows", [])
         initial = None
@@ -2947,14 +3592,29 @@ class MergeApp(tk.Tk):
         selected = self.mapping_tree.selection() if hasattr(self, "mapping_tree") else []
         if not selected:
             return
-        visible_idx = self.mapping_tree.index(selected[0])
-        idx = self.mapping_visible_indexes[visible_idx]
+        selected_indexes = []
+        for item_id in selected:
+            visible_idx = self.mapping_tree.index(item_id)
+            if 0 <= visible_idx < len(self.mapping_visible_indexes):
+                selected_indexes.append(self.mapping_visible_indexes[visible_idx])
+        selected_indexes = sorted(set(selected_indexes), reverse=True)
+        if not selected_indexes:
+            return
+        count = len(selected_indexes)
+        if not messagebox.askyesno(
+            "Confirm Remove",
+            f"Remove {count} selected method mapping record(s)?",
+            parent=self,
+        ):
+            return
         rows = self.app_config.get("mapping_rows", [])
-        if 0 <= idx < len(rows):
-            rows.pop(idx)
+        for idx in selected_indexes:
+            if 0 <= idx < len(rows):
+                rows.pop(idx)
         self.app_config["mapping_rows"] = rows
         self.refresh_mapping_views()
         self.save_config()
+        self.update_status_bar(f"Removed {count} method mapping record(s).")
 
     def edit_acronym_row(self, edit=False):
         rows = self.app_config.get("acronym_rows", [])
@@ -3030,6 +3690,7 @@ class MergeApp(tk.Tk):
                 self.app_config["output_path"] = self.entry_output.get()
             if hasattr(self, "entry_medical_records_folder"):
                 self.app_config["medical_records_folder"] = self.entry_medical_records_folder.get()
+            self.normalize_template_config()
             with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.app_config, f, indent=4)
         except Exception as e:
@@ -3118,6 +3779,7 @@ class MergeApp(tk.Tk):
             if hasattr(self, 'placeholder_text'): # Check if placeholder tab exists
                 self.update_placeholder_list()
             self.save_config()
+            return True
         except Exception as e:
             self.df = None
             self.current_column_signature = ""
@@ -3125,6 +3787,7 @@ class MergeApp(tk.Tk):
                 "Error", f"Failed to read Excel file or clean columns:\n{e}"
             )
             self.update_status_bar("Error loading Excel file.")
+            return False
 
     def autoload_saved_excel_file(self):
         """Load the saved workbook so required-column dropdowns restore on startup."""
@@ -3799,6 +4462,8 @@ class MergeApp(tk.Tk):
     # --- Merge Threads ---
     def start_generate_appeals_thread(self):
         """Start unified generation flow for letters plus form/fax per mapping."""
+        if not self.reload_excel_file(async_load=False):
+            return
         if not self.validate_common_inputs():
             return
         if not self.validate_selected_rationales_before_generation():
@@ -3831,6 +4496,11 @@ class MergeApp(tk.Tk):
         row = self._find_acronym_row(claim_user_group)
         return clean_text_value(row.get("Mailing Folder", "")) if row else ""
 
+    def _mapping_requires_form(self, mapping_row):
+        """Return whether the mapping row's Form? flag is truthy."""
+
+        return str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
+
     def _resolve_required_templates(self, ugid, contract_code, needs_form, needs_fax):
         def find_template(template_type, target_filename):
             default_dir = Path(self.get_template_folder_path(template_type))
@@ -3856,6 +4526,113 @@ class MergeApp(tk.Tk):
             if not fax_path or not os.path.exists(fax_path):
                 return None, None, None, "Fax template missing"
         return letter_path, form_path, fax_path, None
+
+    def _get_template_render_error(self, template_path, context, label):
+        """Return a render error message without writing an output file."""
+
+        try:
+            doc = DocxTemplate(template_path)
+            doc.render(context)
+            return None
+        except Exception as exc:
+            template_name = os.path.basename(template_path) if template_path else label
+            return f"{label} template render error ({template_name}): {exc}"
+
+    def preflight_generation_requirements(self, row_groups):
+        """Validate all rows before creating any generation output folders."""
+
+        failures = []
+        group_configs = {}
+
+        for (ugid, contract_code), group_rows in row_groups:
+            group_error = None
+            mapping_row = None
+            method_type = None
+            method_contact = ""
+            form_flag = False
+            letter_template = None
+            form_template = None
+            fax_template = None
+            mailing_folder = ""
+
+            if not ugid or not contract_code:
+                group_error = "Mapping not found"
+            else:
+                mapping_row = self._lookup_mapping_row(ugid, contract_code)
+                if not mapping_row:
+                    group_error = "Mapping not found"
+                else:
+                    method_type, method_contact, method_err = self._parse_selected_method(mapping_row)
+                    if method_err:
+                        group_error = method_err
+                    else:
+                        form_flag = self._mapping_requires_form(mapping_row)
+                        needs_fax = method_type == "Fax" and not form_flag
+                        letter_template, form_template, fax_template, template_err = self._resolve_required_templates(
+                            ugid,
+                            contract_code,
+                            form_flag,
+                            needs_fax,
+                        )
+                        if template_err:
+                            group_error = template_err
+                        else:
+                            mailing_folder = self._find_mailing_folder(ugid)
+                            if method_type == "Mail" and not mailing_folder:
+                                group_error = "Missing Mailing Folder for Claim User Group"
+
+            if group_error:
+                for index, _ in group_rows:
+                    failures.append((index, group_error))
+                continue
+
+            payer_name = clean_text_value(mapping_row.get("Payer Name", ""))
+            payer_attn = clean_text_value(mapping_row.get("Attention To", ""))
+            address_block = build_contact_address_block(
+                payer_name, payer_attn, method_type, method_contact
+            )
+            acronym = self._find_acronym(ugid)
+
+            for index, row in group_rows:
+                row_data = self.format_row_data(row)
+                blurb_body, blurb_subject, blurb_err = self.get_row_blurb_payload(row)
+                if blurb_err:
+                    failures.append((index, blurb_err))
+                    continue
+
+                context = self.build_letter_merge_dict(row_data, blurb_body, blurb_subject)
+                context["AddressBlock"] = address_block
+                context["payer_name"] = payer_name
+                context["payer_fax"] = method_contact if method_type == "Fax" else ""
+                context["payer_attn"] = payer_attn
+                context["Acronym"] = acronym
+
+                render_checks = [("Letter", letter_template, context)]
+                if form_flag:
+                    render_checks.append(("Form", form_template, context))
+                if fax_template:
+                    fax_context = dict(context)
+                    fax_context["total_pages"] = 1
+                    render_checks.append(("Fax coversheet", fax_template, fax_context))
+
+                for label, template_path, render_context in render_checks:
+                    render_err = self._get_template_render_error(template_path, render_context, label)
+                    if render_err:
+                        failures.append((index, render_err))
+                        break
+
+            group_configs[(ugid, contract_code)] = {
+                "mapping_row": mapping_row,
+                "method_type": method_type,
+                "method_contact": method_contact,
+                "form_flag": form_flag,
+                "letter_template": letter_template,
+                "form_template": form_template,
+                "fax_template": fax_template,
+                "mailing_folder": mailing_folder,
+            }
+
+        return group_configs, failures
 
     def _get_appeal_page_count(self, generated_paths, include_cover=False):
         """Count pages for documents that belong to the appeal, excluding fax covers."""
@@ -3992,6 +4769,8 @@ class MergeApp(tk.Tk):
         contact = clean_text_value(mapping_row.get(contact_field, ""))
         if not method_type:
             return None, None, "Missing method type"
+        if not contact:
+            return None, None, "Missing method contact"
         method_type_norm = method_type.strip().capitalize()
         if method_type_norm in {"Fax", "Mail"}:
             return method_type_norm, contact, None
@@ -4117,11 +4896,19 @@ class MergeApp(tk.Tk):
 
         # Write one notes file into each day folder after all generated letters are available.
         self.last_notes_file_paths = []
-        timestamp = datetime.now().strftime("%m%d%y%H%M%S")
+        used_note_filenames = set()
         for day_folder_str, rows in day_rows.items():
             if not rows:
                 continue
-            notes_path = Path(day_folder_str) / f"Notes{timestamp}.xlsx"
+            day_folder = Path(day_folder_str)
+            while True:
+                timestamp = datetime.now().strftime("%m%d%y%H%M%S")
+                notes_filename = f"Notes{timestamp}.xlsx"
+                notes_path = day_folder / notes_filename
+                if notes_filename not in used_note_filenames and not notes_path.exists():
+                    used_note_filenames.add(notes_filename)
+                    break
+                time.sleep(0.2)
             try:
                 df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
                 df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
@@ -4168,39 +4955,31 @@ class MergeApp(tk.Tk):
             row_groups = self.get_generation_row_groups()
             total_rows = sum(len(group_rows) for _, group_rows in row_groups)
             self.reset_progress(total_rows, "Generate Appeals")
+            group_configs, preflight_failures = self.preflight_generation_requirements(row_groups)
+
+            if preflight_failures:
+                failures.extend(preflight_failures)
+                for _ in range(total_rows):
+                    self.increment_progress("Generate Appeals")
+                self.export_failures(failures)
+                msg = f"Generation stopped before creating files. Success: 0 | Failed: {len(failures)}"
+                self.finalize_progress(msg)
+                messagebox.showwarning(
+                    "Generation Pre-Check Failed",
+                    f"{msg}\n\nA failed accounts workbook was exported to your Downloads folder.",
+                )
+                return
 
             for (ugid, contract_code), group_rows in row_groups:
-                group_error = None
-                if not ugid or not contract_code:
-                    group_error = "Mapping not found"
-                else:
-                    mapping_row = self._lookup_mapping_row(ugid, contract_code)
-                    if not mapping_row:
-                        group_error = "Mapping not found"
-                    else:
-                        method_type, method_contact, method_err = self._parse_selected_method(mapping_row)
-                        if method_err:
-                            group_error = method_err
-                        else:
-                            form_flag = str(mapping_row.get("Form?", "")).strip().lower() in {"true", "1", "yes", "y"}
-                            letter_template, form_template, fax_template, template_err = self._resolve_required_templates(
-                                ugid,
-                                contract_code,
-                                form_flag,
-                                method_type == "Fax",
-                            )
-                            if template_err:
-                                group_error = template_err
-                            else:
-                                mailing_folder = self._find_mailing_folder(ugid)
-                                if method_type == "Mail" and not mailing_folder:
-                                    group_error = "Missing Mailing Folder for Claim User Group"
-
-                if group_error:
-                    for index, _ in group_rows:
-                        failures.append((index, group_error))
-                        self.increment_progress("Generate Appeals")
-                    continue
+                group_config = group_configs[(ugid, contract_code)]
+                mapping_row = group_config["mapping_row"]
+                method_type = group_config["method_type"]
+                method_contact = group_config["method_contact"]
+                form_flag = group_config["form_flag"]
+                letter_template = group_config["letter_template"]
+                form_template = group_config["form_template"]
+                fax_template = group_config["fax_template"]
+                mailing_folder = group_config["mailing_folder"]
 
                 payer_name = clean_text_value(mapping_row.get("Payer Name", ""))
                 payer_attn = clean_text_value(mapping_row.get("Attention To", ""))
@@ -4211,14 +4990,18 @@ class MergeApp(tk.Tk):
                 acronym = self._find_acronym(ugid)
 
                 for index, row in group_rows:
+                    target_dir = None
                     try:
                         account = sanitize_path_component(row.get(self.account_col_name, ""))
-                        contract_name = sanitize_path_component(row.get(self.contract_name_col, ""))
+                        contract_folder = build_contract_folder_name(
+                            contract_code,
+                            row.get(self.contract_name_col, ""),
+                        )
                         now = datetime.now()
                         path_parts = [
                             sanitize_path_component(ugid),
                             route_folder,
-                            sanitize_path_component(f"{contract_code} - {contract_name}"),
+                            contract_folder,
                             sanitize_path_component(f"{now.strftime('%Y')}"),
                             sanitize_path_component(f"{now.strftime('%m.%Y')}"),
                             sanitize_path_component(f"{now.strftime('%m%d%y')}"),
@@ -4229,7 +5012,7 @@ class MergeApp(tk.Tk):
                             Path(self.output_path)
                             / sanitize_path_component(ugid)
                             / route_folder
-                            / sanitize_path_component(f"{contract_code} - {contract_name}")
+                            / contract_folder
                         )
                         try:
                             contract_dir.mkdir(parents=True, exist_ok=True)
@@ -4271,6 +5054,7 @@ class MergeApp(tk.Tk):
                         letter_path = self.create_and_save_doc(letter_template, letter_base, context)
                         if not letter_path:
                             failures.append((index, "Letter generation error"))
+                            self.cleanup_failed_output(target_dir)
                             self.increment_progress("Generate Appeals")
                             continue
 
@@ -4296,7 +5080,7 @@ class MergeApp(tk.Tk):
                         )
                         generated_paths.extend(medrec_paths)
 
-                        if method_type == "Fax":
+                        if method_type == "Fax" and not form_flag:
                             fax_context = dict(context)
                             attachment_pages = self._get_account_folder_page_count(
                                 target_dir,
@@ -4336,6 +5120,8 @@ class MergeApp(tk.Tk):
                         })
                     except Exception as row_exc:
                         failures.append((index, f"Row error: {row_exc}"))
+                        if target_dir is not None:
+                            self.cleanup_failed_output(target_dir)
                     finally:
                         self.increment_progress("Generate Appeals")
 
