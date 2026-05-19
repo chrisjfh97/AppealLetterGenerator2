@@ -1,5 +1,6 @@
 """Tkinter application for generating appeal letters and related artifacts."""
 
+import argparse
 import csv
 import datetime as dt
 import glob
@@ -54,6 +55,7 @@ DEFAULT_FAX_INFO = {
     "user_phone": "(800) 930-6387",
     "user_fax": "(888) 437-7288",
 }
+BOT_NETWORK_PATH = r"\\Intermix.nas1.us2.experian.corp\pars_rpa\HC82\Master_file\Individual Files"
 INVALID_PATH_CHARS = re.compile(r'[\\/:*?"<>|]')
 MAX_CONTRACT_FOLDER_NAME_LENGTH = 80
 
@@ -122,6 +124,108 @@ CONFIG_FILE_PATH = USER_PATHS["Config"] / "merge_config.json"
 DEBUG_LOG_PATH = USER_PATHS["Logs"] / "app_debug.log"
 CRASH_LOG_PATH = USER_PATHS["Logs"] / "app_crash.log"
 ERROR_LOG_PATH = USER_PATHS["Logs"] / "merge_errors.log"
+
+
+def get_default_app_config():
+    """Return a fresh application configuration dictionary."""
+
+    return {
+        "excel_path": "",
+        "templates": {"letter": {}, "fax": {}, "form": {}},
+        "output_path": "",
+        "column_formats": {},
+        "blurbs": {},
+        "auto_detect_blurb": True,
+        "auto_detect_medical_records": False,
+        "auto_send_notes_to_bot": False,
+        "medical_records_folder": "",
+        "bot_network_path": BOT_NETWORK_PATH,
+        "selected_blurb": "(None)",
+        "fax_info": DEFAULT_FAX_INFO.copy(),
+        "special_cols": {
+            "account_col": "",
+            "claim_user_group_col": "",
+            "contract_code_col": "",
+            "contract_name_col": "",
+            "dos_col": "",
+        },
+        "special_col_profiles": {},
+        "extract_config": {
+            "start": DEFAULT_EXTRACT_START,
+            "end": DEFAULT_EXTRACT_END,
+        },
+        "cm_headings": {},
+        "mapping_rows": [],
+        "acronym_rows": [],
+    }
+
+
+def deep_update_config(source, overrides):
+    """Merge nested config values into source and return source."""
+
+    for key, value in overrides.items():
+        if (
+            isinstance(value, dict)
+            and key in source
+            and isinstance(source[key], dict)
+        ):
+            deep_update_config(source[key], value)
+        else:
+            source[key] = value
+    return source
+
+
+def apply_legacy_config_migrations(app_config, loaded_config):
+    """Normalize legacy config keys after loading saved JSON."""
+
+    templates = app_config.get("templates")
+    if not isinstance(templates, dict):
+        templates = {"letter": {}, "fax": {}, "form": {}}
+        app_config["templates"] = templates
+    for template_type in ("letter", "fax", "form"):
+        if not isinstance(templates.get(template_type), dict):
+            templates[template_type] = {}
+    legacy_template_paths = {
+        "letter": loaded_config.get("letter_template_path", ""),
+        "fax": loaded_config.get("fax_template_path", ""),
+    }
+    for template_type, legacy_path in legacy_template_paths.items():
+        if legacy_path and os.path.exists(legacy_path):
+            base_name = Path(legacy_path).stem
+            template_map = templates.setdefault(template_type, {})
+            if base_name not in template_map:
+                template_map[base_name] = legacy_path
+
+    for legacy_key in (
+        "letter_template_path",
+        "fax_template_path",
+        "form_templates",
+        "selected_templates",
+        "payer_contacts",
+        "addresses",
+        "cm_headings",
+    ):
+        app_config.pop(legacy_key, None)
+
+
+def load_saved_app_config(base_config=None):
+    """Load the shared GUI/CLI config file into a default config dictionary."""
+
+    app_config = base_config if base_config is not None else get_default_app_config()
+    if CONFIG_FILE_PATH.exists():
+        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+            loaded_config = json.load(f)
+        deep_update_config(app_config, loaded_config)
+        apply_legacy_config_migrations(app_config, loaded_config)
+    return app_config
+
+
+def save_app_config(app_config):
+    """Persist the shared GUI/CLI config file."""
+
+    CONFIG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(app_config, f, indent=4)
 
 
 def get_initial_directory(folder_key: str) -> str:
@@ -389,34 +493,7 @@ class MergeApp(tk.Tk):
         self.configure_window_geometry()
         # --- Data Storage ---
         self.df = None
-        self.app_config = {
-            "excel_path": "",
-            "templates": {"letter": {}, "fax": {}, "form": {}},
-            "output_path": "",
-            "column_formats": {},
-            "blurbs": {},
-            "auto_detect_blurb": True,
-            "auto_detect_medical_records": False,
-            "auto_send_notes_to_bot": False,
-            "medical_records_folder": "",
-            "selected_blurb": "(None)",
-            "fax_info": DEFAULT_FAX_INFO.copy(),
-            "special_cols": {
-                "account_col": "",
-                "claim_user_group_col": "",
-                "contract_code_col": "",
-                "contract_name_col": "",
-                "dos_col": "",
-            },
-            "special_col_profiles": {},
-            "extract_config": {
-                "start": DEFAULT_EXTRACT_START,
-                "end": DEFAULT_EXTRACT_END,
-            },
-            "cm_headings": {},
-            "mapping_rows": [],
-            "acronym_rows": [],
-        }
+        self.app_config = get_default_app_config()
         self.column_widgets = {}
         self.current_column_signature = ""
         self.status_queue = queue.Queue()
@@ -436,7 +513,7 @@ class MergeApp(tk.Tk):
         self.selected_payer_data = {}
         self.selected_address = ""
         # --- NOTE EXTRACTION V2 ---
-        self.bot_network_path = r"\\Intermix.nas1.us2.experian.corp\pars_rpa\HC82\Master_file\Individual Files"
+        self.bot_network_path = self.app_config.get("bot_network_path", BOT_NETWORK_PATH)
         self.last_notes_file_paths = []
         self.last_successful_items = []
         self.auto_send_notes_to_bot_enabled_for_run = False
@@ -3690,49 +3767,15 @@ class MergeApp(tk.Tk):
                 self.app_config["output_path"] = self.entry_output.get()
             if hasattr(self, "entry_medical_records_folder"):
                 self.app_config["medical_records_folder"] = self.entry_medical_records_folder.get()
+            self.app_config["bot_network_path"] = self.bot_network_path
             self.normalize_template_config()
-            with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.app_config, f, indent=4)
+            save_app_config(self.app_config)
         except Exception as e:
             print(f"Error saving config: {e}")
     def load_config(self):
         """Load configuration values from disk while preserving defaults."""
         try:
-            if CONFIG_FILE_PATH.exists():
-                with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
-                    loaded_config = json.load(f)
-                    def deep_update(source, overrides):
-                        for key, value in overrides.items():
-                            if (
-                                isinstance(value, dict)
-                                and key in source
-                                and isinstance(source[key], dict)
-                            ):
-                                deep_update(source[key], value)
-                            else:
-                                source[key] = value
-                        return source
-                    self.app_config = deep_update(self.app_config, loaded_config)
-                    legacy_template_paths = {
-                        "letter": loaded_config.get("letter_template_path", ""),
-                        "fax": loaded_config.get("fax_template_path", ""),
-                    }
-                    for template_type, legacy_path in legacy_template_paths.items():
-                        if legacy_path and os.path.exists(legacy_path):
-                            base_name = Path(legacy_path).stem
-                            template_map = self.app_config["templates"].setdefault(template_type, {})
-                            if base_name not in template_map:
-                                template_map[base_name] = legacy_path
-                    for legacy_key in (
-                        "letter_template_path",
-                        "fax_template_path",
-                        "form_templates",
-                        "selected_templates",
-                        "payer_contacts",
-                        "addresses",
-                        "cm_headings",
-                    ):
-                        self.app_config.pop(legacy_key, None)
+            self.app_config = load_saved_app_config(self.app_config)
         except Exception as e:
             print(f"Error loading config: {e}")
             messagebox.showerror(
@@ -4951,6 +4994,11 @@ class MergeApp(tk.Tk):
 
         failures = []
         successes = []
+        self.last_generation_summary = {
+            "success": 0,
+            "failed": 0,
+            "message": "",
+        }
         try:
             row_groups = self.get_generation_row_groups()
             total_rows = sum(len(group_rows) for _, group_rows in row_groups)
@@ -4963,6 +5011,11 @@ class MergeApp(tk.Tk):
                     self.increment_progress("Generate Appeals")
                 self.export_failures(failures)
                 msg = f"Generation stopped before creating files. Success: 0 | Failed: {len(failures)}"
+                self.last_generation_summary = {
+                    "success": 0,
+                    "failed": len(failures),
+                    "message": msg,
+                }
                 self.finalize_progress(msg)
                 messagebox.showwarning(
                     "Generation Pre-Check Failed",
@@ -5136,6 +5189,11 @@ class MergeApp(tk.Tk):
                     self.q_print("Auto-send notes to bot is enabled.")
                     self.run_send_to_bot(show_success_message=False, reset_buttons=False)
             msg = f"Generation finished. Success: {len(successes)} | Failed: {len(failures)}"
+            self.last_generation_summary = {
+                "success": len(successes),
+                "failed": len(failures),
+                "message": msg,
+            }
             self.finalize_progress(msg)
             if failures:
                 messagebox.showwarning(
@@ -5185,6 +5243,12 @@ class MergeApp(tk.Tk):
         valid_files = [p for p in self.last_notes_file_paths if os.path.exists(p)]
         copied = 0
         failures = []
+        self.last_send_to_bot_summary = {
+            "copied": 0,
+            "failed": 0,
+            "failures": [],
+            "ok": False,
+        }
         try:
             destination = Path(self.bot_network_path)
             destination.mkdir(parents=True, exist_ok=True)
@@ -5209,11 +5273,25 @@ class MergeApp(tk.Tk):
                         f"{message}\n\n{details}",
                     ),
                 )
+                self.last_send_to_bot_summary = {
+                    "copied": copied,
+                    "failed": len(failures),
+                    "failures": failures,
+                    "ok": False,
+                }
+                return False
             else:
                 message = f"Copied {copied} notes file(s) to bot."
                 self.q_print(message)
                 if show_success_message:
                     self.after(0, lambda: messagebox.showinfo("Send Complete", message))
+                self.last_send_to_bot_summary = {
+                    "copied": copied,
+                    "failed": 0,
+                    "failures": [],
+                    "ok": True,
+                }
+                return True
         except Exception as exc:
             err_text = str(exc)
             self.q_print(f"Send to bot failed: {err_text}")
@@ -5224,6 +5302,13 @@ class MergeApp(tk.Tk):
                     f"Could not send notes files to the bot folder.\n\n{err_text}",
                 ),
             )
+            self.last_send_to_bot_summary = {
+                "copied": copied,
+                "failed": len(valid_files) - copied,
+                "failures": [err_text],
+                "ok": False,
+            }
+            return False
         finally:
             if reset_buttons:
                 self.after(0, lambda: self.set_buttons_state("normal"))
@@ -5286,19 +5371,309 @@ class MergeApp(tk.Tk):
             import traceback
             traceback.print_exc()
             return None
-# --- Run the Application ---
-if __name__ == "__main__":
+
+
+class CliValue:
+    """Small stand-in for Tk variables and simple entry widgets."""
+
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+    def delete(self, *_args):
+        self.value = ""
+
+    def insert(self, _index, value):
+        self.value = value
+
+    def update_idletasks(self):
+        return None
+
+    def config(self, **_kwargs):
+        return None
+
+    configure = config
+
+
+class CliWidget:
+    """No-op widget adapter for headless code paths."""
+
+    def config(self, **_kwargs):
+        return None
+
+    configure = config
+
+    def select(self, *_args):
+        return None
+
+
+class CliMessageboxPatch:
+    """Route Tk messagebox calls to the terminal while running headlessly."""
+
+    def __init__(self, runner):
+        self.runner = runner
+        self.originals = {}
+
+    def __enter__(self):
+        for name in ("showerror", "showwarning", "showinfo", "askyesno"):
+            self.originals[name] = getattr(messagebox, name)
+        messagebox.showerror = self.showerror
+        messagebox.showwarning = self.showwarning
+        messagebox.showinfo = self.showinfo
+        messagebox.askyesno = self.askyesno
+        return self
+
+    def __exit__(self, *_exc_info):
+        for name, original in self.originals.items():
+            setattr(messagebox, name, original)
+
+    def showerror(self, title, message, *_args, **_kwargs):
+        self.runner.print_error(f"ERROR: {title}: {message}")
+
+    def showwarning(self, title, message, *_args, **_kwargs):
+        self.runner.print_error(f"WARNING: {title}: {message}")
+
+    def showinfo(self, title, message, *_args, **_kwargs):
+        self.runner.print_info(f"{title}: {message}")
+
+    def askyesno(self, title, message, *_args, **_kwargs):
+        self.runner.print_error(f"Prompt skipped in CLI: {title}: {message}")
+        return False
+
+
+class HeadlessMergeRunner(MergeApp):
+    """CLI adapter that reuses MergeApp generation logic without creating Tk."""
+
+    def __getattr__(self, name):
+        """Keep missing GUI-only attributes from delegating into Tk internals."""
+
+        raise AttributeError(name)
+
+    def __init__(self, app_config, stdout=None, stderr=None):
+        self.stdout = stdout or sys.stdout
+        self.stderr = stderr or sys.stderr
+        self.df = None
+        self.app_config = app_config
+        self.column_widgets = {}
+        self.current_column_signature = ""
+        self.status_queue = queue.Queue()
+        self.error_queue = queue.Queue()
+        self.error_entries = []
+        self._grid_weights = []
+        self.mapping_visible_indexes = []
+        self.current_task_total = 0
+        self.current_task_completed = 0
+        self.cancel_requested = False
+        self.fatal_error = False
+        self.today_date_str = datetime.now().strftime("%B %d, %Y")
+        self.file_date_str = datetime.now().strftime("%m%d%y")
+        self.user_info_data = DEFAULT_FAX_INFO.copy()
+        self.selected_payer_data = {}
+        self.selected_address = ""
+        self.bot_network_path = self.app_config.get("bot_network_path", BOT_NETWORK_PATH)
+        self.last_notes_file_paths = []
+        self.last_successful_items = []
+        self.last_generation_summary = {"success": 0, "failed": 0, "message": ""}
+        self.last_send_to_bot_summary = {
+            "copied": 0,
+            "failed": 0,
+            "failures": [],
+            "ok": False,
+        }
+        self.auto_send_notes_to_bot_enabled_for_run = False
+
+        self.enforce_fax_info_defaults()
+        self.normalize_blurb_config()
+        self.normalize_template_config()
+
+        special_cols = self.app_config.setdefault("special_cols", {})
+        self.auto_detect_blurb_var = CliValue(
+            bool(self.app_config.get("auto_detect_blurb", True))
+        )
+        self.auto_detect_medical_records_var = CliValue(
+            bool(self.app_config.get("auto_detect_medical_records", False))
+        )
+        self.auto_send_notes_to_bot_var = CliValue(
+            bool(self.app_config.get("auto_send_notes_to_bot", False))
+        )
+        self.entry_excel = CliValue(self.app_config.get("excel_path", ""))
+        self.entry_output = CliValue(self.app_config.get("output_path", ""))
+        self.entry_today_date = CliValue(self.today_date_str)
+        self.entry_file_date = CliValue(self.file_date_str)
+        self.entry_medical_records_folder = CliValue(
+            self.app_config.get("medical_records_folder", "")
+        )
+        self.combo_blurb = CliValue(self.app_config.get("selected_blurb", "(None)"))
+        self.combo_account_col = CliValue(special_cols.get("account_col", ""))
+        self.combo_claim_user_group_col = CliValue(
+            special_cols.get("claim_user_group_col", "")
+        )
+        self.combo_contract_code_col = CliValue(special_cols.get("contract_code_col", ""))
+        self.combo_contract_name_col = CliValue(special_cols.get("contract_name_col", ""))
+        self.combo_dos_col = CliValue(special_cols.get("dos_col", ""))
+        self.progress_var = CliValue(0)
+        self.progress_label_var = CliValue("Ready.")
+        self.progress_bar = CliWidget()
+        self.notebook = CliWidget()
+        self.tab_config = None
+
+    def print_info(self, message):
+        if message:
+            print(message, file=self.stdout, flush=True)
+
+    def print_error(self, message):
+        if message:
+            print(message, file=self.stderr, flush=True)
+
+    def after(self, _delay_ms, callback=None):
+        if callback:
+            return callback()
+        return None
+
+    def update_idletasks(self):
+        return None
+
+    def save_config(self, event=None):
+        return None
+
+    def populate_column_config_tab(self):
+        return None
+
+    def update_placeholder_list(self):
+        return None
+
+    def update_status_bar(self, message=None):
+        if message:
+            self.print_info(message)
+
+    def q_print(self, message):
+        self.print_info(message)
+
+    def process_error_queue(self):
+        return None
+
+    def reset_progress(self, total, task_name):
+        self.current_task_total = max(total, 0)
+        self.current_task_completed = 0
+        self.cancel_requested = False
+        self.fatal_error = False
+        self.progress_var.set(0)
+        self.progress_label_var.set(f"{task_name}: 0/{total}")
+        self.print_info(f"{task_name}: 0/{total}")
+
+    def increment_progress(self, task_name):
+        self.current_task_completed += 1
+        self.progress_var.set(self.current_task_completed)
+        self.progress_label_var.set(
+            f"{task_name}: {self.current_task_completed}/{self.current_task_total}"
+        )
+        if (
+            self.current_task_completed <= 10
+            or self.current_task_completed == self.current_task_total
+            or self.current_task_completed % 25 == 0
+        ):
+            self.print_info(self.progress_label_var.get())
+
+    def finalize_progress(self, message):
+        self.progress_label_var.set(message)
+        self.print_info(message)
+
+    def run_generate_from_cli(self):
+        """Run the configured generation workflow and return a process exit code."""
+
+        with CliMessageboxPatch(self):
+            if not self.auto_detect_blurb_var.get():
+                selected_blurb = self.combo_blurb.get()
+                if (
+                    selected_blurb
+                    and selected_blurb != "(None)"
+                    and selected_blurb not in self.app_config.get("blurbs", {})
+                ):
+                    available = ", ".join(sorted(self.app_config.get("blurbs", {})))
+                    detail = f" Available rationales: {available}" if available else ""
+                    self.print_error(
+                        f"ERROR: Rationale not found: {selected_blurb}.{detail}"
+                    )
+                    return 1
+            if not self.reload_excel_file(async_load=False):
+                return 1
+            if not self.validate_common_inputs():
+                return 1
+            if not self.validate_selected_rationales_before_generation():
+                return 1
+            self.auto_send_notes_to_bot_enabled_for_run = bool(
+                self.auto_send_notes_to_bot_var.get()
+            )
+            self.set_buttons_state("disabled")
+            try:
+                self.run_generate_appeals()
+            except Exception as exc:
+                self.print_error(f"ERROR: Generation failed: {exc}")
+                logging.error("CLI generation failed", exc_info=True)
+                return 1
+
+        generation = self.last_generation_summary
+        if generation.get("failed", 0):
+            return 1
+        send_summary = getattr(self, "last_send_to_bot_summary", {})
+        if (
+            self.auto_send_notes_to_bot_enabled_for_run
+            and self.last_notes_file_paths
+            and send_summary
+            and not send_summary.get("ok", True)
+        ):
+            return 1
+        return 0
+
+    def run_send_notes_from_cli(self, note_files):
+        """Copy explicit notes files to the bot intake folder."""
+
+        valid_files = []
+        missing_files = []
+        for file_path in note_files:
+            candidate = Path(file_path)
+            if candidate.exists() and candidate.is_file():
+                valid_files.append(str(candidate))
+            else:
+                missing_files.append(str(candidate))
+
+        for file_path in missing_files:
+            self.print_error(f"ERROR: Notes file not found: {file_path}")
+        if missing_files or not valid_files:
+            return 1
+
+        self.last_notes_file_paths = valid_files
+        with CliMessageboxPatch(self):
+            ok = self.run_send_to_bot(show_success_message=False, reset_buttons=False)
+        return 0 if ok else 1
+
+
+def configure_logging():
+    """Initialize file logging for GUI and CLI runs."""
+
     logging.basicConfig(
         filename=DEBUG_LOG_PATH,
         filemode="w",
         level=logging.DEBUG,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.info("App Initialized")
+
+
+def launch_gui():
+    """Start the Tkinter GUI and return a process exit code."""
+
+    configure_logging()
     try:
         app = MergeApp()
         app.mainloop()
+        return 0
     except Exception as e:
         logging.error(f"Fatal GUI error: {e}", exc_info=True)
         import traceback
@@ -5308,8 +5683,297 @@ if __name__ == "__main__":
                 "Fatal Error",
                 f"A critical error occurred:\n{e}\n\nCheck app_crash.log for details.",
             )
-        except:
+        except Exception:
             pass
         with open(CRASH_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"\n--- {datetime.now()} ---\n")
-            f.write(traceback.format_exc()) 
+            f.write(traceback.format_exc())
+        return 1
+
+
+def build_cli_parser():
+    """Create the terminal command parser."""
+
+    parser = argparse.ArgumentParser(
+        prog="AutomatedAppealLetterGenerator.py",
+        description="Generate appeal letters from the terminal or open the GUI.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python AutomatedAppealLetterGenerator.py\n"
+            "  python AutomatedAppealLetterGenerator.py gui\n"
+            "  python AutomatedAppealLetterGenerator.py generate --excel report.xlsx --output C:\\Appeals\n"
+            "  python AutomatedAppealLetterGenerator.py generate --no-send-notes-to-bot\n"
+            "  python AutomatedAppealLetterGenerator.py send-notes Notes051926120000.xlsx\n"
+            "  python AutomatedAppealLetterGenerator.py config show\n"
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    gui_parser = subparsers.add_parser("gui", help="Open the desktop GUI.")
+    gui_parser.set_defaults(handler=lambda _args: launch_gui())
+
+    generate_parser = subparsers.add_parser(
+        "generate",
+        help="Generate appeal packets using saved config plus optional overrides.",
+    )
+    generate_parser.add_argument("--excel", metavar="PATH", help="Excel report to use.")
+    generate_parser.add_argument("--output", metavar="PATH", help="Output folder.")
+    generate_parser.add_argument(
+        "--letter-date",
+        metavar="TEXT",
+        help='Letter date text, for example "May 19, 2026".',
+    )
+    generate_parser.add_argument(
+        "--file-date",
+        metavar="MMDDYY",
+        help="Short file date used in generated filenames.",
+    )
+    bot_group = generate_parser.add_mutually_exclusive_group()
+    bot_group.add_argument(
+        "--send-notes-to-bot",
+        dest="send_notes_to_bot",
+        action="store_true",
+        default=None,
+        help="Send generated notes to the bot intake folder for this run.",
+    )
+    bot_group.add_argument(
+        "--no-send-notes-to-bot",
+        dest="send_notes_to_bot",
+        action="store_false",
+        help="Do not send generated notes to the bot intake folder for this run.",
+    )
+    med_group = generate_parser.add_mutually_exclusive_group()
+    med_group.add_argument(
+        "--auto-detect-medical-records",
+        dest="auto_detect_medical_records",
+        action="store_true",
+        default=None,
+        help="Move matching medical record files into generated appeal folders.",
+    )
+    med_group.add_argument(
+        "--no-auto-detect-medical-records",
+        dest="auto_detect_medical_records",
+        action="store_false",
+        help="Disable medical record auto-detection for this run.",
+    )
+    generate_parser.add_argument(
+        "--medical-records-folder",
+        metavar="PATH",
+        help="Medical records source folder for this run.",
+    )
+    generate_parser.add_argument(
+        "--bot-path",
+        metavar="PATH",
+        help="Bot intake folder for this run.",
+    )
+    generate_parser.add_argument(
+        "--rationale",
+        metavar="NAME",
+        help="Use a specific saved rationale instead of RationalName auto-detection.",
+    )
+    generate_parser.set_defaults(handler=run_cli_generate)
+
+    send_parser = subparsers.add_parser(
+        "send-notes",
+        help="Copy explicit Notes*.xlsx files to the bot intake folder.",
+    )
+    send_parser.add_argument("files", nargs="+", metavar="FILE")
+    send_parser.add_argument(
+        "--bot-path",
+        metavar="PATH",
+        help="Bot intake folder for this send operation.",
+    )
+    send_parser.set_defaults(handler=run_cli_send_notes)
+
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Show or update shared GUI/CLI defaults.",
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command",
+        required=True,
+    )
+    config_show = config_subparsers.add_parser("show", help="Show key saved settings.")
+    config_show.set_defaults(handler=run_cli_config_show)
+    config_set = config_subparsers.add_parser("set", help="Update key saved settings.")
+    config_set.add_argument("--output", metavar="PATH", help="Default output folder.")
+    config_set.add_argument("--excel", metavar="PATH", help="Default Excel report.")
+    config_set.add_argument(
+        "--medical-records-folder",
+        metavar="PATH",
+        help="Default medical records folder.",
+    )
+    config_set.add_argument("--bot-path", metavar="PATH", help="Default bot intake folder.")
+    config_set.add_argument(
+        "--auto-detect-medical-records",
+        choices=("on", "off"),
+        help="Default medical-record auto-detection behavior.",
+    )
+    config_set.add_argument(
+        "--auto-send-notes-to-bot",
+        choices=("on", "off"),
+        help="Default bot-send behavior after generation.",
+    )
+    config_set.add_argument(
+        "--auto-detect-rationale",
+        choices=("on", "off"),
+        help="Default rationale selection behavior.",
+    )
+    config_set.add_argument(
+        "--rationale",
+        metavar="NAME",
+        help="Default manual rationale name; also turns auto-detect rationale off.",
+    )
+    config_set.add_argument(
+        "--clear-rationale",
+        action="store_true",
+        help="Clear the default manual rationale and reset it to (None).",
+    )
+    config_set.set_defaults(handler=run_cli_config_set)
+
+    return parser
+
+
+def run_cli_generate(args):
+    """Handle the generate command."""
+
+    configure_logging()
+    try:
+        app_config = load_saved_app_config()
+    except Exception as exc:
+        print(f"ERROR: Could not load config {CONFIG_FILE_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.excel is not None:
+        app_config["excel_path"] = args.excel
+    if args.output is not None:
+        app_config["output_path"] = args.output
+    if args.medical_records_folder is not None:
+        app_config["medical_records_folder"] = args.medical_records_folder
+    if args.bot_path is not None:
+        app_config["bot_network_path"] = args.bot_path
+    if args.auto_detect_medical_records is not None:
+        app_config["auto_detect_medical_records"] = bool(args.auto_detect_medical_records)
+    if args.send_notes_to_bot is not None:
+        app_config["auto_send_notes_to_bot"] = bool(args.send_notes_to_bot)
+    if args.rationale is not None:
+        app_config["auto_detect_blurb"] = False
+        app_config["selected_blurb"] = args.rationale
+
+    runner = HeadlessMergeRunner(app_config)
+    if args.letter_date is not None:
+        runner.entry_today_date.set(args.letter_date)
+    if args.file_date is not None:
+        runner.entry_file_date.set(args.file_date)
+    return runner.run_generate_from_cli()
+
+
+def run_cli_send_notes(args):
+    """Handle the send-notes command."""
+
+    configure_logging()
+    try:
+        app_config = load_saved_app_config()
+    except Exception as exc:
+        print(f"ERROR: Could not load config {CONFIG_FILE_PATH}: {exc}", file=sys.stderr)
+        return 1
+    if args.bot_path is not None:
+        app_config["bot_network_path"] = args.bot_path
+    runner = HeadlessMergeRunner(app_config)
+    return runner.run_send_notes_from_cli(args.files)
+
+
+def run_cli_config_show(_args):
+    """Print CLI-relevant shared settings."""
+
+    try:
+        app_config = load_saved_app_config()
+    except Exception as exc:
+        print(f"ERROR: Could not load config {CONFIG_FILE_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Config file: {CONFIG_FILE_PATH}")
+    print(f"Excel file: {app_config.get('excel_path', '')}")
+    print(f"Output folder: {app_config.get('output_path', '')}")
+    print(f"Medical records folder: {app_config.get('medical_records_folder', '')}")
+    print(
+        "Auto-detect medical records: "
+        f"{bool(app_config.get('auto_detect_medical_records', False))}"
+    )
+    print(f"Auto-send notes to bot: {bool(app_config.get('auto_send_notes_to_bot', False))}")
+    print(f"Auto-detect rationale: {bool(app_config.get('auto_detect_blurb', True))}")
+    print(f"Selected rationale: {app_config.get('selected_blurb', '(None)')}")
+    print(f"Bot intake folder: {app_config.get('bot_network_path', BOT_NETWORK_PATH)}")
+    return 0
+
+
+def run_cli_config_set(args):
+    """Update CLI-relevant shared settings."""
+
+    try:
+        app_config = load_saved_app_config()
+    except Exception as exc:
+        print(f"ERROR: Could not load config {CONFIG_FILE_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    changes = []
+    if args.output is not None:
+        app_config["output_path"] = args.output
+        changes.append("output")
+    if args.excel is not None:
+        app_config["excel_path"] = args.excel
+        changes.append("excel")
+    if args.medical_records_folder is not None:
+        app_config["medical_records_folder"] = args.medical_records_folder
+        changes.append("medical-records-folder")
+    if args.bot_path is not None:
+        app_config["bot_network_path"] = args.bot_path
+        changes.append("bot-path")
+    if args.auto_detect_medical_records is not None:
+        app_config["auto_detect_medical_records"] = args.auto_detect_medical_records == "on"
+        changes.append("auto-detect-medical-records")
+    if args.auto_send_notes_to_bot is not None:
+        app_config["auto_send_notes_to_bot"] = args.auto_send_notes_to_bot == "on"
+        changes.append("auto-send-notes-to-bot")
+    if args.auto_detect_rationale is not None:
+        app_config["auto_detect_blurb"] = args.auto_detect_rationale == "on"
+        changes.append("auto-detect-rationale")
+    if args.rationale is not None:
+        app_config["selected_blurb"] = args.rationale
+        app_config["auto_detect_blurb"] = False
+        changes.append("rationale")
+    if args.clear_rationale:
+        app_config["selected_blurb"] = "(None)"
+        changes.append("clear-rationale")
+
+    if not changes:
+        print("ERROR: Provide at least one config value to update.", file=sys.stderr)
+        return 1
+
+    app_config["fax_info"] = DEFAULT_FAX_INFO.copy()
+    try:
+        save_app_config(app_config)
+    except Exception as exc:
+        print(f"ERROR: Could not save config {CONFIG_FILE_PATH}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Updated {', '.join(changes)} in {CONFIG_FILE_PATH}")
+    return 0
+
+
+def main(argv=None):
+    """Route to GUI or CLI."""
+
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv:
+        return launch_gui()
+    parser = build_cli_parser()
+    args = parser.parse_args(argv)
+    if not hasattr(args, "handler"):
+        parser.print_help()
+        return 0
+    return args.handler(args)
+# --- Run the Application ---
+if __name__ == "__main__":
+    sys.exit(main())
