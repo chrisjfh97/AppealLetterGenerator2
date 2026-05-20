@@ -4,7 +4,6 @@ import argparse
 import csv
 import datetime as dt
 import glob
-import hashlib
 import io
 import json
 import logging
@@ -242,7 +241,7 @@ def get_initial_directory(folder_key: str) -> str:
 def get_docx_page_count(docx_fpath):
     """Uses zipfile and regex to get the page count from a .docx file."""
     try:
-        with zipfile.ZipFile(docx_fpath) as docx_object:
+        with zipfile.ZipFile(to_filesystem_path(docx_fpath)) as docx_object:
             docx_property_file_data = docx_object.read("docProps/app.xml").decode()
             match = re.search(r"<Pages>(\d+)</Pages>", docx_property_file_data)
             if match:
@@ -258,7 +257,7 @@ def get_docx_page_count(docx_fpath):
 def get_pdf_page_count(pdf_fpath):
     """Uses PyMuPDF (fitz) to get the page count from a .pdf file."""
     try:
-        with fitz.open(pdf_fpath) as doc:
+        with fitz.open(to_filesystem_path(pdf_fpath)) as doc:
             count = doc.page_count
         return count
     except Exception as e:
@@ -319,6 +318,56 @@ def sanitize_path_component(value, fallback="Unknown"):
     return text if text else fallback
 
 
+def to_filesystem_path(path):
+    """Return a Windows extended-length path for filesystem APIs."""
+
+    text = os.fspath(path)
+    if os.name != "nt" or text.startswith("\\\\?\\"):
+        return text
+
+    absolute = os.path.abspath(text)
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute.lstrip("\\")
+    return "\\\\?\\" + absolute
+
+
+def path_exists(path):
+    """Return whether a path exists, including long Windows paths."""
+
+    return os.path.exists(to_filesystem_path(path))
+
+
+def path_is_dir(path):
+    """Return whether a path is a directory, including long Windows paths."""
+
+    return os.path.isdir(to_filesystem_path(path))
+
+
+def path_is_file(path):
+    """Return whether a path is a file, including long Windows paths."""
+
+    return os.path.isfile(to_filesystem_path(path))
+
+
+def wait_for_file_ready(path, retries=10, delay=0.2):
+    """Wait briefly for a just-saved file to be visible to Windows/OneDrive."""
+
+    fs_path = to_filesystem_path(path)
+    last_error = None
+    for attempt in range(retries):
+        try:
+            if os.path.isfile(fs_path):
+                with open(fs_path, "rb"):
+                    return True
+        except OSError as exc:
+            last_error = exc
+        time.sleep(delay * (attempt + 1))
+
+    if last_error:
+        raise last_error
+    raise FileNotFoundError(f"Saved file was not found: {path}")
+
+
 def ensure_directory_ready(path, retries=5, delay=0.2):
     """Create a directory with retries for OneDrive/SharePoint shortcut folders."""
 
@@ -326,28 +375,32 @@ def ensure_directory_ready(path, retries=5, delay=0.2):
     parts_to_create = []
     current = target
 
-    while not current.exists():
+    while not path_exists(current):
         parts_to_create.append(current)
         parent = current.parent
         if parent == current:
             break
         current = parent
 
-    if current.exists() and not current.is_dir():
+    if path_exists(current) and not path_is_dir(current):
         raise NotADirectoryError(f"Path parent is not a folder: {current}")
 
     for directory in reversed(parts_to_create):
         last_error = None
         for attempt in range(retries):
             try:
-                directory.mkdir(exist_ok=True)
-                if directory.exists() and directory.is_dir():
+                os.mkdir(to_filesystem_path(directory))
+                if path_exists(directory) and path_is_dir(directory):
                     break
+            except FileExistsError:
+                if path_is_dir(directory):
+                    break
+                raise
             except FileNotFoundError as exc:
                 last_error = exc
             except OSError as exc:
                 last_error = exc
-                if directory.exists() and directory.is_dir():
+                if path_exists(directory) and path_is_dir(directory):
                     break
             time.sleep(delay * (attempt + 1))
         else:
@@ -368,18 +421,14 @@ def build_contract_folder_name(contract_code, contract_name):
     if len(folder_name) <= MAX_CONTRACT_FOLDER_NAME_LENGTH:
         return folder_name
 
-    hash_suffix = hashlib.sha1(folder_name.encode("utf-8")).hexdigest()[:8]
-    suffix = f"... {hash_suffix}"
     prefix = f"{safe_code} - "
-    available_name_length = MAX_CONTRACT_FOLDER_NAME_LENGTH - len(prefix) - len(suffix)
+    available_name_length = MAX_CONTRACT_FOLDER_NAME_LENGTH - len(prefix)
 
     if available_name_length > 0:
         truncated_name = safe_name[:available_name_length].rstrip(" .")
-        return f"{prefix}{truncated_name}{suffix}"
+        return f"{prefix}{truncated_name}".rstrip(" .")
 
-    available_base_length = MAX_CONTRACT_FOLDER_NAME_LENGTH - len(suffix)
-    truncated_base = folder_name[:available_base_length].rstrip(" .")
-    return f"{truncated_base}{suffix}"
+    return folder_name[:MAX_CONTRACT_FOLDER_NAME_LENGTH].rstrip(" .")
 
 
 def clean_text_value(value):
@@ -3930,7 +3979,7 @@ class MergeApp(tk.Tk):
     def _add_notes_table(self, workbook_path):
         """Add a formatted table to the notes worksheet."""
         try:
-            workbook = load_workbook(workbook_path)
+            workbook = load_workbook(to_filesystem_path(workbook_path))
             worksheet = workbook.active
             max_row = worksheet.max_row
             max_col = worksheet.max_column
@@ -3947,7 +3996,7 @@ class MergeApp(tk.Tk):
             )
             table.tableStyleInfo = style
             worksheet.add_table(table)
-            workbook.save(workbook_path)
+            workbook.save(to_filesystem_path(workbook_path))
         except Exception as exc:
             self.q_print(f"Warning: Failed to add table formatting: {exc}")
     def select_output(self):
@@ -4587,25 +4636,25 @@ class MergeApp(tk.Tk):
         def find_template(template_type, target_filename):
             default_dir = Path(self.get_template_folder_path(template_type))
             candidate = default_dir / target_filename
-            if candidate.exists():
+            if path_exists(candidate):
                 return str(candidate)
             for path in self.get_template_mapping(template_type).values():
-                if Path(path).name.lower() == target_filename.lower() and Path(path).exists():
+                if Path(path).name.lower() == target_filename.lower() and path_exists(path):
                     return path
             return ""
 
         letter_path = find_template("letter", f"{ugid} - Letter template.docx")
-        if not letter_path or not os.path.exists(letter_path):
+        if not letter_path or not path_exists(letter_path):
             return None, None, None, "Letter template missing"
         form_path = None
         if needs_form:
             form_path = find_template("form", f"{ugid} - Form - {contract_code}.docx")
-            if not form_path or not os.path.exists(form_path):
+            if not form_path or not path_exists(form_path):
                 return None, None, None, "Form template missing"
         fax_path = None
         if needs_fax:
             fax_path = find_template("fax", f"{ugid} - Fax.docx")
-            if not fax_path or not os.path.exists(fax_path):
+            if not fax_path or not path_exists(fax_path):
                 return None, None, None, "Fax template missing"
         return letter_path, form_path, fax_path, None
 
@@ -4613,7 +4662,7 @@ class MergeApp(tk.Tk):
         """Return a render error message without writing an output file."""
 
         try:
-            doc = DocxTemplate(template_path)
+            doc = DocxTemplate(to_filesystem_path(template_path))
             doc.render(context)
             return None
         except Exception as exc:
@@ -4721,7 +4770,7 @@ class MergeApp(tk.Tk):
 
         total_pages = 0
         for file_path in generated_paths:
-            if file_path and os.path.exists(file_path):
+            if file_path and path_exists(file_path):
                 file_name = Path(file_path).name.lower()
                 if ".fax" in file_name:
                     continue
@@ -4737,12 +4786,13 @@ class MergeApp(tk.Tk):
 
         total_pages = 0
         folder = Path(account_folder)
-        if folder.exists() and folder.is_dir():
-            for file_path in folder.iterdir():
-                if not file_path.is_file() or file_path.name.startswith("~$"):
+        if path_is_dir(folder):
+            for entry in os.scandir(to_filesystem_path(folder)):
+                if not entry.is_file() or entry.name.startswith("~$"):
                     continue
-                if ".fax" in file_path.name.lower():
+                if ".fax" in entry.name.lower():
                     continue
+                file_path = folder / entry.name
                 page_count = self._get_file_page_count(file_path)
                 if page_count > 0:
                     total_pages += page_count
@@ -4823,9 +4873,9 @@ class MergeApp(tk.Tk):
                 if source.resolve() == target.resolve():
                     moved_paths.append(str(target))
                     continue
-                if target.exists():
-                    target.unlink()
-                shutil.move(str(source), str(target))
+                if path_exists(target):
+                    os.remove(to_filesystem_path(target))
+                shutil.move(to_filesystem_path(source), to_filesystem_path(target))
                 moved_paths.append(str(target))
             except Exception as exc:
                 self.q_print(f"Medical record move warning for {account_number}: {source.name} - {exc}")
@@ -4836,9 +4886,9 @@ class MergeApp(tk.Tk):
 
         source = Path(source_path)
         destination = Path(destination_folder)
-        destination.mkdir(parents=True, exist_ok=True)
+        ensure_directory_ready(destination)
         target = destination / source.name
-        shutil.copy2(source, target)
+        shutil.copy2(to_filesystem_path(source), to_filesystem_path(target))
         return target
 
     def _parse_selected_method(self, mapping_row):
@@ -4865,17 +4915,17 @@ class MergeApp(tk.Tk):
         for file_path in created_paths:
             try:
                 path = Path(file_path)
-                if path.exists() and path.is_file():
-                    path.unlink()
+                if path_is_file(path):
+                    os.remove(to_filesystem_path(path))
             except Exception as exc:
                 self.q_print(f"Cleanup warning for {file_path}: {exc}")
 
         try:
-            output_root = Path(self.output_path).resolve()
-            current = Path(account_dir).resolve()
+            output_root = Path(os.path.abspath(str(self.output_path)))
+            current = Path(os.path.abspath(str(account_dir)))
             while current != output_root and output_root in current.parents:
                 try:
-                    current.rmdir()
+                    os.rmdir(to_filesystem_path(current))
                 except OSError:
                     break
                 current = current.parent
@@ -4896,7 +4946,7 @@ class MergeApp(tk.Tk):
                 continue
             for file_path in item.get("generated_paths", []):
                 try:
-                    if file_path and os.path.exists(file_path):
+                    if file_path and path_exists(file_path):
                         self._copy_file_flat_overwrite(file_path, mailing_folder)
                         copied += 1
                 except Exception as exc:
@@ -4933,7 +4983,7 @@ class MergeApp(tk.Tk):
 
         for item in successes:
             try:
-                doc = Document(item["letter_path"])
+                doc = Document(to_filesystem_path(item["letter_path"]))
                 letter_text = "\n".join([para.text for para in doc.paragraphs])
                 match = re.search(pattern, letter_text, re.DOTALL | re.IGNORECASE)
                 extracted_text = normalize_extracted_note_text(match.group(1)) if match else ""
@@ -4987,13 +5037,13 @@ class MergeApp(tk.Tk):
                 timestamp = datetime.now().strftime("%m%d%y%H%M%S")
                 notes_filename = f"Notes{timestamp}.xlsx"
                 notes_path = day_folder / notes_filename
-                if notes_filename not in used_note_filenames and not notes_path.exists():
+                if notes_filename not in used_note_filenames and not path_exists(notes_path):
                     used_note_filenames.add(notes_filename)
                     break
                 time.sleep(0.2)
             try:
                 df_notes = pd.DataFrame(rows, columns=["Reference", "Note", "UGID", "Status Message", "Workflow Reason", "DOS"])
-                df_notes.to_excel(notes_path, index=False, sheet_name="Notes")
+                df_notes.to_excel(to_filesystem_path(notes_path), index=False, sheet_name="Notes")
                 self._add_notes_table(notes_path)
                 self.last_notes_file_paths.append(str(notes_path))
             except Exception as exc:
@@ -5004,9 +5054,10 @@ class MergeApp(tk.Tk):
             try:
                 ready_path = Path(day_folder_str) / "Ready.txt"
                 # Create a simple Ready marker file only if it doesn't already exist
-                if not ready_path.exists():
+                if not path_exists(ready_path):
                     try:
-                        ready_path.write_text("Ready\n", encoding='utf-8')
+                        with open(to_filesystem_path(ready_path), "w", encoding="utf-8") as ready_file:
+                            ready_file.write("Ready\n")
                     except Exception as exc:
                         self.q_print(f"Failed to write Ready.txt in {day_folder_str}: {exc}")
             except Exception as exc:
@@ -5111,12 +5162,15 @@ class MergeApp(tk.Tk):
                             if method_type == "Fax" and method_contact:
                                 fax_file = contract_dir / "Fax Number.txt"
                                 try:
-                                    if fax_file.exists():
-                                        existing = fax_file.read_text(encoding="utf-8").strip()
+                                    if path_exists(fax_file):
+                                        with open(to_filesystem_path(fax_file), "r", encoding="utf-8") as existing_file:
+                                            existing = existing_file.read().strip()
                                         if existing != method_contact:
-                                            fax_file.write_text(method_contact + "\n", encoding="utf-8")
+                                            with open(to_filesystem_path(fax_file), "w", encoding="utf-8") as update_file:
+                                                update_file.write(method_contact + "\n")
                                     else:
-                                        fax_file.write_text(method_contact + "\n", encoding="utf-8")
+                                        with open(to_filesystem_path(fax_file), "w", encoding="utf-8") as new_file:
+                                            new_file.write(method_contact + "\n")
                                 except Exception as exc:
                                     self.q_print(f"Failed to write Fax Number.txt in {contract_dir}: {exc}")
                         except Exception:
@@ -5397,12 +5451,13 @@ class MergeApp(tk.Tk):
     def create_and_save_doc(self, template_path, save_path_base, merge_data):
         """Uses docxtpl to render and save a .docx file."""
         try:
-            doc = DocxTemplate(template_path)
+            doc = DocxTemplate(to_filesystem_path(template_path))
             context = merge_data
             doc.render(context)
             docx_final_path = save_path_base + ".docx"
             ensure_directory_ready(Path(docx_final_path).parent)
-            doc.save(docx_final_path)
+            doc.save(to_filesystem_path(docx_final_path))
+            wait_for_file_ready(docx_final_path)
             return docx_final_path
         except Exception as e:
             error_msg = (
