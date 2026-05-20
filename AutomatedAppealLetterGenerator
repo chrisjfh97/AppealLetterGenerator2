@@ -950,7 +950,7 @@ class MergeApp(tk.Tk):
         self.combo_blurb.bind("<<ComboboxSelected>>", self.save_config)
         self.chk_auto_detect_blurb = ttk.Checkbutton(
             select_frame,
-            text="Auto-detect rationale from RationalName Column",
+            text="Auto-detect rationale from RationaleName Column",
             variable=self.auto_detect_blurb_var,
             command=self.toggle_blurb_selection_mode,
         )
@@ -2475,13 +2475,13 @@ class MergeApp(tk.Tk):
         """Resolve the rationale body/subject for a specific dataframe row."""
 
         if self.auto_detect_blurb_var.get():
-            if "RationalName" not in self.df.columns:
-                return None, None, "Missing RationalName column"
-            blurb_key = clean_text_value(row.get("RationalName", ""))
+            if "RationaleName" not in self.df.columns:
+                return None, None, "Missing RationaleName column"
+            blurb_key = clean_text_value(row.get("RationaleName", ""))
             if not blurb_key:
-                return None, None, "Missing RationalName value"
+                return None, None, "Missing RationaleName value"
             if blurb_key not in self.app_config["blurbs"]:
-                return None, None, f"RationalName '{blurb_key}' does not match an existing rationale"
+                return None, None, f"RationaleName '{blurb_key}' does not match an existing rationale"
             blurb_body, blurb_subject = self.get_blurb_payload(blurb_key)
             return blurb_body, blurb_subject, None
 
@@ -4314,10 +4314,10 @@ class MergeApp(tk.Tk):
             )
             self.notebook.select(self.tab_config)
             return False
-        if self.auto_detect_blurb_var.get() and "RationalName" not in self.df.columns:
+        if self.auto_detect_blurb_var.get() and "RationaleName" not in self.df.columns:
             messagebox.showerror(
                 "Error",
-                "Auto-detect rationale is enabled, so the Excel file must include a 'RationalName' column.",
+                "Auto-detect rationale is enabled, so the Excel file must include a 'RationaleName' column.",
             )
             return False
         if self._medical_records_enabled():
@@ -4458,9 +4458,9 @@ class MergeApp(tk.Tk):
         missing_rationales = set()
 
         if self.auto_detect_blurb_var.get():
-            if self.df is None or "RationalName" not in self.df.columns:
+            if self.df is None or "RationaleName" not in self.df.columns:
                 return False
-            for value in self.df["RationalName"]:
+            for value in self.df["RationaleName"]:
                 blurb_key = clean_text_value(value)
                 if not blurb_key:
                     continue
@@ -4901,11 +4901,11 @@ class MergeApp(tk.Tk):
                 if item["method_type"] == "Mail":
                     address = normalize_note_address_text(item["address_block"])
                     heading = f"Appeal letter mailed to {item['payer_name']}, address: {address}. Noted as:"
-                    status = "Appeal letter mailed"
+                    status = "2003"
                 else:
                     attn_text = f", attention to: {item['payer_attn']}" if item.get("payer_attn") else ""
                     heading = f"Appeal letter faxed to {item['payer_name']}{attn_text}, fax number: {item.get('payer_fax', '')}. Noted as:"
-                    status = "Appeal letter faxed"
+                    status = "2004"
 
                 saved_as = Path(item['letter_path']).stem
                 row_entry = [
@@ -5770,7 +5770,7 @@ def build_cli_parser():
     generate_parser.add_argument(
         "--rationale",
         metavar="NAME",
-        help="Use a specific saved rationale instead of RationalName auto-detection.",
+        help="Use a specific saved rationale instead of RationaleName auto-detection.",
     )
     generate_parser.set_defaults(handler=run_cli_generate)
 
