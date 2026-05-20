@@ -78,6 +78,32 @@ def normalize_note_address_text(text):
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+def extract_note_text_from_source(text, start_text, end_text, fallback_to_source=False):
+    """Extract CM note text from rendered text without reopening a saved DOCX."""
+
+    source = "" if text is None else str(text)
+    if not source:
+        return ""
+    if start_text:
+        if end_text:
+            pattern = rf"({re.escape(start_text)}.*?)(?={re.escape(end_text)})"
+        else:
+            pattern = rf"({re.escape(start_text)}.*)"
+        match = re.search(pattern, source, re.DOTALL | re.IGNORECASE)
+        if match:
+            return normalize_extracted_note_text(match.group(1))
+    return normalize_extracted_note_text(source) if fallback_to_source else ""
+
+
+def get_rendered_docx_text(doc_template):
+    """Return paragraph text from a rendered DocxTemplate."""
+
+    rendered_doc = getattr(doc_template, "docx", None)
+    if rendered_doc is None:
+        return ""
+    return "\n".join(paragraph.text for paragraph in rendered_doc.paragraphs)
+
+
 def initialize_user_directories():
     """Ensure the user's desktop contains the folders required by the app."""
 
@@ -4935,6 +4961,14 @@ class MergeApp(tk.Tk):
     def copy_mail_outputs_to_mailing_folders(self, successes):
         """Copy generated Mail files into each Claim User Group's mailing folder."""
 
+        started = time.perf_counter()
+        total_files = sum(
+            len(item.get("generated_paths", []))
+            for item in successes
+            if item.get("method_type") == "Mail"
+        )
+        if total_files:
+            self.q_print(f"Copying {total_files} mailed appeal file(s) into mailing folders...")
         copied = 0
         failures = []
         for item in successes:
@@ -4952,7 +4986,8 @@ class MergeApp(tk.Tk):
                 except Exception as exc:
                     failures.append((item.get("index"), f"Mailing folder copy failed for {Path(file_path).name}: {exc}"))
         if copied:
-            self.q_print(f"Copied {copied} mailed appeal file(s) into mailing folders.")
+            elapsed = time.perf_counter() - started
+            self.q_print(f"Copied {copied} mailed appeal file(s) into mailing folders in {elapsed:.1f}s.")
         return failures
 
     def get_generation_row_groups(self):
@@ -4976,17 +5011,25 @@ class MergeApp(tk.Tk):
         # Group extracted notes by the "day" folder (two levels up from the letter file)
         start_text = self.app_config["extract_config"].get("start", DEFAULT_EXTRACT_START)
         end_text = self.app_config["extract_config"].get("end", DEFAULT_EXTRACT_END)
-        pattern = rf"({re.escape(start_text)}.*?)(?={re.escape(end_text)})" if end_text else rf"({re.escape(start_text)}.*)"
 
+        started = time.perf_counter()
+        self.q_print(f"Building CM notes for {len(successes)} generated letter(s)...")
         day_rows = {}  # key: day_folder_str -> list of rows
         fax_ready_files = {}  # key: day_folder_str -> set of fax filenames
 
         for item in successes:
             try:
-                doc = Document(to_filesystem_path(item["letter_path"]))
-                letter_text = "\n".join([para.text for para in doc.paragraphs])
-                match = re.search(pattern, letter_text, re.DOTALL | re.IGNORECASE)
-                extracted_text = normalize_extracted_note_text(match.group(1)) if match else ""
+                if "extracted_note_text" in item:
+                    extracted_text = item.get("extracted_note_text", "")
+                else:
+                    doc = Document(to_filesystem_path(item["letter_path"]))
+                    letter_text = "\n".join([para.text for para in doc.paragraphs])
+                    extracted_text = extract_note_text_from_source(
+                        letter_text,
+                        start_text,
+                        end_text,
+                        fallback_to_source=False,
+                    )
                 if item["method_type"] == "Mail":
                     address = normalize_note_address_text(item["address_block"])
                     heading = f"Appeal letter mailed to {item['payer_name']}, address: {address}. Noted as:"
@@ -5065,6 +5108,8 @@ class MergeApp(tk.Tk):
 
         if self.last_notes_file_paths and hasattr(self, "btn_send_to_bot"):
             self.btn_send_to_bot.config(state=tk.NORMAL)
+        elapsed = time.perf_counter() - started
+        self.q_print(f"CM notes finished in {elapsed:.1f}s.")
 
     def start_letter_merge_thread(self):
         messagebox.showinfo("Info", "Use 'Generate Appeals' on the Main tab.")
@@ -5094,6 +5139,8 @@ class MergeApp(tk.Tk):
             total_rows = sum(len(group_rows) for _, group_rows in row_groups)
             self.reset_progress(total_rows, "Generate Appeals")
             group_configs, preflight_failures = self.preflight_generation_requirements(row_groups)
+            note_start_text = self.app_config["extract_config"].get("start", DEFAULT_EXTRACT_START)
+            note_end_text = self.app_config["extract_config"].get("end", DEFAULT_EXTRACT_END)
 
             if preflight_failures:
                 failures.extend(preflight_failures)
@@ -5194,15 +5241,29 @@ class MergeApp(tk.Tk):
                         context["payer_fax"] = method_contact if method_type == "Fax" else ""
                         context["payer_attn"] = payer_attn
                         context["Acronym"] = acronym
-
                         filename_base = sanitize_path_component(f"{self.file_date_str}.{acronym}.{account}")
                         letter_base = str(target_dir / filename_base)
-                        letter_path = self.create_and_save_doc(letter_template, letter_base, context)
+                        letter_result = self.create_and_save_doc(
+                            letter_template,
+                            letter_base,
+                            context,
+                            return_rendered_text=True,
+                        )
+                        if letter_result:
+                            letter_path, rendered_letter_text = letter_result
+                        else:
+                            letter_path, rendered_letter_text = None, ""
                         if not letter_path:
                             failures.append((index, "Letter generation error"))
                             self.cleanup_failed_output(target_dir)
                             self.increment_progress("Generate Appeals")
                             continue
+                        extracted_note_text = extract_note_text_from_source(
+                            rendered_letter_text,
+                            note_start_text,
+                            note_end_text,
+                            fallback_to_source=False,
+                        )
 
                         generated_paths = [letter_path]
                         form_path = ""
@@ -5228,8 +5289,8 @@ class MergeApp(tk.Tk):
 
                         if method_type == "Fax" and not form_flag:
                             fax_context = dict(context)
-                            attachment_pages = self._get_account_folder_page_count(
-                                target_dir,
+                            attachment_pages = self._get_appeal_page_count(
+                                generated_paths,
                                 include_cover=False,
                             )
                             fax_context["total_pages"] = attachment_pages + 1
@@ -5263,6 +5324,7 @@ class MergeApp(tk.Tk):
                             "workflow_reason": row.get("Workflow_Reason", ""),
                             "dos": self.extract_first_dos_date(row.get(self.dos_col, "")),
                             "account": account,
+                            "extracted_note_text": extracted_note_text,
                         })
                     except Exception as row_exc:
                         failures.append((index, f"Row error: {row_exc}"))
@@ -5448,16 +5510,19 @@ class MergeApp(tk.Tk):
         full_data["total_pages"] = page_count
         return full_data
     # --- create_and_save_doc ---
-    def create_and_save_doc(self, template_path, save_path_base, merge_data):
+    def create_and_save_doc(self, template_path, save_path_base, merge_data, return_rendered_text=False):
         """Uses docxtpl to render and save a .docx file."""
         try:
             doc = DocxTemplate(to_filesystem_path(template_path))
             context = merge_data
             doc.render(context)
+            rendered_text = get_rendered_docx_text(doc) if return_rendered_text else ""
             docx_final_path = save_path_base + ".docx"
             ensure_directory_ready(Path(docx_final_path).parent)
             doc.save(to_filesystem_path(docx_final_path))
             wait_for_file_ready(docx_final_path)
+            if return_rendered_text:
+                return docx_final_path, rendered_text
             return docx_final_path
         except Exception as e:
             error_msg = (
